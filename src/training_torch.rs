@@ -17,6 +17,8 @@ pub fn train_with_torch(
     artifact_dir_override: Option<String>,
     batch_override: Option<usize>,
     weight_decay_override: Option<f64>,
+    huber_delta: Option<f64>,
+    dropout_override: Option<f32>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
@@ -52,7 +54,10 @@ pub fn train_with_torch(
 
     // Create model
     let mut vs = nn::VarStore::new(device);
-    let config = ModelConfig::default();
+    let mut config = ModelConfig::default();
+    if let Some(dr) = dropout_override {
+        config.dropout = dr;
+    }
     let model = TorchStockModel::new(&vs.root(), &config);
 
     // Optimizer

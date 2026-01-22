@@ -69,6 +69,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut out_dir: Option<String> = None;
     let mut batch_size_override: Option<usize> = None;
     let mut weight_decay_override: Option<f64> = None;
+    let mut huber_delta: Option<f64> = None;
+    let mut dropout_override: Option<f32> = None;
+
     while i < args.len() {
         match args[i].as_str() {
             "--out" => {
@@ -93,6 +96,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            "--huber-delta" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        huber_delta = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--dropout" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f32>() {
+                        dropout_override = Some(v);
+                        i += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -106,6 +125,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         out_dir,
         batch_size_override,
         weight_decay_override,
+        huber_delta,
+        dropout_override,
     )?;
     Ok(())
 }
