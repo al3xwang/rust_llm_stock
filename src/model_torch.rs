@@ -124,7 +124,7 @@ impl TorchStockModel {
     /// Returns: (pred_1day, pred_3day, conf_1day, conf_3day) where confidence is in range [0, 1]
     pub fn forward_dual(&self, input: &Tensor, train: bool) -> (Tensor, Tensor, Tensor, Tensor) {
         let x = self.input_proj.forward(input);
-        let x = if train { x.dropout(self.dropout, true) } else { x };
+        let x = if train { x.dropout(self.dropout.into(), true) } else { x };
 
         // LSTM for temporal processing if enabled
         let x = if let (Some(lstm), Some(proj)) = (&self.lstm, &self.lstm_to_transformer) {
@@ -170,7 +170,7 @@ impl TransformerEncoderLayer {
         let feed_forward = nn::seq()
             .add(nn::linear(vs / "ff1", d_model, d_ff, Default::default()))
             .add_fn(|x: &Tensor| x.relu())
-            .add_fn(move |x: &Tensor| x.dropout(dropout, true))
+            .add_fn(move |x: &Tensor| x.dropout(dropout.into(), true))
             .add(nn::linear(vs / "ff2", d_ff, d_model, Default::default()));
 
         let norm1 = nn::layer_norm(vs / "norm1", vec![d_model], Default::default());

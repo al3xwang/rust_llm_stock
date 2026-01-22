@@ -344,7 +344,7 @@ fn train_epoch_stream(
                 // VarStore::variables() returns a HashMap<String, Tensor>
                 let vars_map = vs.variables();
                 for (_name, v) in vars_map.iter() {
-                    let s = v.pow(2).sum(tch::Kind::Float);
+                    let s = v.pow_tensor_scalar(2).sum(tch::Kind::Float);
                     l2_sum = l2_sum + s;
                 }
                 // Use f64 to match tensor scalar conversion expectations
