@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut train_path = "data/train.csv".to_string();
     let mut val_path = "data/val.csv".to_string();
     let mut device = Device::cuda_if_available();
+    let mut learning_rate: Option<f64> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -46,6 +47,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     i += 1;
                 }
             }
+            "--lr" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        learning_rate = Some(v);
+                        i += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -55,6 +64,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let train_records = load_records_from_csv(&train_path)?;
     println!("Loading validation data from {}", val_path);
     let val_records = load_records_from_csv(&val_path)?;
-    train_with_torch(train_records, val_records, device)?;
+    // Optional --out flag to set artifact output directory
+    let mut i = 1; // restart arg parsing to pick up --out
+    let mut out_dir: Option<String> = None;
+    while i < args.len() {
+        if args[i] == "--out" && i + 1 < args.len() {
+            out_dir = Some(args[i + 1].clone());
+            i += 1;
+        }
+        i += 1;
+    }
+
+    train_with_torch(train_records, val_records, device, learning_rate, out_dir)?;
     Ok(())
 }

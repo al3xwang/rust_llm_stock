@@ -13,6 +13,8 @@ pub fn train_with_torch(
     train_records: Vec<MlTrainingRecord>,
     valid_records: Vec<MlTrainingRecord>,
     device: Device,
+    override_lr: Option<f64>,
+    artifact_dir_override: Option<String>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
@@ -21,7 +23,8 @@ pub fn train_with_torch(
     let batch_size = 256; // Large batches to maximize V100 GPU utilization (~8-10GB)
     let max_epochs = 1000; // Maximum epochs (early stopping controls actual training)
     // Scale learning rate with batch size: LR_new = LR_old * sqrt(batch_size_new / batch_size_old)
-    let learning_rate = 1e-4 * (256.0_f64 / 48.0_f64).sqrt(); // ≈ 2.3e-4 (already optimal for batch_size=256)
+    let default_learning_rate = 1e-4 * (256.0_f64 / 48.0_f64).sqrt(); // ≈ 2.3e-4 (already optimal for batch_size=256)
+    let learning_rate = override_lr.unwrap_or(default_learning_rate);
     let early_stop_patience = 20; // More patience for finding minima
     let lr_decay_factor = 0.8; // Slightly gentler LR reduction for larger batch
     let lr_patience = 8; // Reduce LR earlier to help escape plateaus
@@ -48,8 +51,9 @@ pub fn train_with_torch(
     // Optimizer
     let mut opt = nn::Adam::default().build(&vs, learning_rate)?;
 
-    // Create artifact directory
-    let artifact_dir = format!("{}/artifacts", std::env::current_dir().unwrap().display());
+    // Create artifact directory (allow override via arg)
+    let default_artifact_dir = format!("{}/artifacts", std::env::current_dir().unwrap().display());
+    let artifact_dir = artifact_dir_override.unwrap_or(default_artifact_dir);
     fs::create_dir_all(&artifact_dir)?;
 
     println!("\n=== Training Configuration ===");
