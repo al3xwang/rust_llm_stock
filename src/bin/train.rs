@@ -39,10 +39,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--device" => {
                 if i + 1 < args.len() {
-                    match args[i + 1].as_str() {
-                        "cpu" => device = Device::Cpu,
-                        "cuda" => device = Device::Cuda(0),
-                        _ => {}
+                    let dev_str = args[i + 1].as_str();
+                    if dev_str == "cpu" {
+                        device = Device::Cpu;
+                    } else if dev_str.starts_with("cuda") {
+                        // Accept "cuda" or "cuda:<index>"
+                        let parts: Vec<&str> = dev_str.split(':').collect();
+                        let idx = if parts.len() > 1 {
+                            parts[1].parse::<i64>().unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        device = Device::Cuda(idx);
                     }
                     i += 1;
                 }
