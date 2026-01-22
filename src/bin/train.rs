@@ -88,6 +88,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut max_epochs_override: Option<usize> = None;
     let mut early_stop_override: Option<usize> = None;
 
+    // Sample-weighting & scheduler extras
+    let mut t_mult: Option<f64> = None;
+    let mut sample_weight_method: Option<String> = None;
+    let mut sample_weight_decay: f64 = 0.0;
+    let mut sample_weight_normalize: Option<String> = None;
+
     while i < args.len() {
         match args[i].as_str() {
             "--out" => {
