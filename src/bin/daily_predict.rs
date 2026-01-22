@@ -3,7 +3,7 @@
 /// Usage:
 ///   cargo run --release --bin daily_predict -- --features features.csv --output predictions.csv
 use clap::Parser;
-use rust_llm_stock::feature_normalization::FEATURE_SIZE;
+use rust_llm_stock::feature_normalization::{FEATURE_SIZE, normalize_features, denormalize_pct_feature};
 use serde::Serialize;
 use std::error::Error;
 use tch::{Device, Tensor, nn};
@@ -76,7 +76,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
 
         if features.len() == FEATURE_SIZE {
-            feature_data.push((ts_code, features));
+            // Heuristic: if key features are outside normalized ranges, assume this row is raw and normalize it
+            // normalized close_pct should be within roughly [-1, 1] and rsi within [0,1]
+            let needs_normalize = features[12].abs() > 1.5 || features[33].abs() > 1.5;
+            if needs_normalize {
+                let mut arr = [0.0f32; FEATURE_SIZE];
+                for (i, v) in features.iter().enumerate() {
+                    arr[i] = *v;
+                }
+                // normalize_features ignores the reference value in current impl, pass a sane fallback
+                let normalized = normalize_features(arr, arr[12].abs().max(0.01));
+                feature_data.push((ts_code, normalized.to_vec()));
+            } else {
+                feature_data.push((ts_code, features));
+            }
         }
     }
 
@@ -160,12 +173,12 @@ fn simple_predict(features: &[f32]) -> f32 {
         return 0.0;
     }
 
-    // Simplified heuristic: weighted combination of key features
-    let close_pct = features[12];
-    let rsi_14 = features[33];
-    let momentum_5 = features[48];
+    // Interpret inputs as normalized features and convert key values back to raw scales for heuristic
+    let close_pct = denormalize_pct_feature(features[12]); // raw percent (e.g., 2.0 == 2%)
+    let rsi_14 = features[33] * 100.0; // normalized RSI -> percent 0-100
+    let momentum_5 = features[48] * 0.2; // reverse clamp(-0.2,0.2)/0.2 normalization
 
-    // If yesterday went down hard, predict reversal
+    // If yesterday went down hard, predict reversal (use raw thresholds)
     let reversal_signal = if close_pct < -2.0 && rsi_14 < 30.0 {
         0.5
     } else if close_pct > 2.0 && rsi_14 > 70.0 {
@@ -174,7 +187,7 @@ fn simple_predict(features: &[f32]) -> f32 {
         0.0
     };
 
-    // Momentum component
+    // Momentum component (use raw momentum)
     let momentum_component = momentum_5 * 0.5;
 
     (reversal_signal + momentum_component).clamp(-3.0, 3.0)
@@ -186,14 +199,14 @@ fn calculate_confidence(features: &[f32]) -> f32 {
         return 0.3;
     }
 
-    // Check for signal strength across multiple indicators
-    let rsi = features[33];
+    // Convert normalized RSI back to raw 0-100
+    let rsi = features[33] * 100.0;
     let vol_percentile = features[100];
 
-    // RSI extremes = higher confidence
+    // RSI extremes = higher confidence (operate on raw RSI)
     let rsi_confidence = if rsi < 20.0 || rsi > 80.0 { 0.8 } else { 0.4 };
 
-    // Volatility regime adjustment
+    // Volatility regime adjustment (vol_percentile is already 0-1)
     let vol_confidence = if vol_percentile > 0.7 { 0.6 } else { 0.9 };
 
     (rsi_confidence * vol_confidence as f32).clamp(0.0, 1.0)
