@@ -64,17 +64,48 @@ fn main() -> Result<(), Box<dyn Error>> {
     let train_records = load_records_from_csv(&train_path)?;
     println!("Loading validation data from {}", val_path);
     let val_records = load_records_from_csv(&val_path)?;
-    // Optional --out flag to set artifact output directory
-    let mut i = 1; // restart arg parsing to pick up --out
+    // Optional --out, --batch, --wd flags
+    let mut i = 1; // restart arg parsing to pick up --out and other options
     let mut out_dir: Option<String> = None;
+    let mut batch_size_override: Option<usize> = None;
+    let mut weight_decay_override: Option<f64> = None;
     while i < args.len() {
-        if args[i] == "--out" && i + 1 < args.len() {
-            out_dir = Some(args[i + 1].clone());
-            i += 1;
+        match args[i].as_str() {
+            "--out" => {
+                if i + 1 < args.len() {
+                    out_dir = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--batch" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<usize>() {
+                        batch_size_override = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--wd" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        weight_decay_override = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            _ => {}
         }
         i += 1;
     }
 
-    train_with_torch(train_records, val_records, device, learning_rate, out_dir)?;
+    train_with_torch(
+        train_records,
+        val_records,
+        device,
+        learning_rate,
+        out_dir,
+        batch_size_override,
+        weight_decay_override,
+    )?;
     Ok(())
 }

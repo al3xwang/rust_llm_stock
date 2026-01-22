@@ -15,19 +15,26 @@ pub fn train_with_torch(
     device: Device,
     override_lr: Option<f64>,
     artifact_dir_override: Option<String>,
+    batch_override: Option<usize>,
+    weight_decay_override: Option<f64>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
     // Config - Optimized for 80%+ GPU utilization
     let seq_len = 60; // ~3 months of context, aligns with longer-horizon features
-    let batch_size = 256; // Large batches to maximize V100 GPU utilization (~8-10GB)
+    // Defaults (can be overridden via CLI)
+    let default_batch_size = 256; // Large batches to maximize GPU utilization
+    let batch_size = batch_override.unwrap_or(default_batch_size);
     let max_epochs = 1000; // Maximum epochs (early stopping controls actual training)
+
     // Scale learning rate with batch size: LR_new = LR_old * sqrt(batch_size_new / batch_size_old)
-    let default_learning_rate = 1e-4 * (256.0_f64 / 48.0_f64).sqrt(); // ≈ 2.3e-4 (already optimal for batch_size=256)
+    let default_learning_rate = 1e-4 * (batch_size as f64 / 48.0_f64).sqrt();
     let learning_rate = override_lr.unwrap_or(default_learning_rate);
+
     let early_stop_patience = 20; // More patience for finding minima
     let lr_decay_factor = 0.8; // Slightly gentler LR reduction for larger batch
     let lr_patience = 8; // Reduce LR earlier to help escape plateaus
+    let weight_decay = weight_decay_override.unwrap_or(0.0); // L2 coefficient (added to loss)
 
     // Create datasets
     println!("Grouping data by stock symbols...");
@@ -103,6 +110,7 @@ pub fn train_with_torch(
             &mut vs,
             device,
             seq_len,
+            weight_decay,
         )?;
         println!(
             "  Train Loss: {:.6} (MSE: {:.6}, Dir: {:.6})",
@@ -111,7 +119,7 @@ pub fn train_with_torch(
 
         // Validation
         let valid_loss =
-            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len)?;
+            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len)?; // validation excludes weight decay term
         println!("  Valid Loss: {:.6}", valid_loss);
 
         // Save best model and track improvement
@@ -177,6 +185,7 @@ fn train_epoch_stream(
     vs: &mut nn::VarStore,
     device: Device,
     seq_len: usize,
+    weight_decay: f64,
 ) -> Result<(f64, f64, f64)> {
     let mut total_loss = 0.0;
     let mut total_mse = 0.0;
@@ -319,9 +328,23 @@ fn train_epoch_stream(
             let dir_val = f64::try_from(&direction_loss).unwrap_or(f64::NAN);
 
             // Weighted combined loss (use shallow_clone to avoid moves)
-            let loss = (mse_loss_1day.shallow_clone() * weight_1day_mse)
+            let mut loss = (mse_loss_1day.shallow_clone() * weight_1day_mse)
                 + (mse_loss_3day.shallow_clone() * weight_3day_mse)
                 + (direction_loss.shallow_clone() * weight_direction);
+
+            // L2 regularization (weight decay) applied to all trainable parameters
+            if weight_decay > 0.0 {
+                // Sum squares of variables (if accessible)
+                let mut l2_sum = Tensor::from(0.0).to_device(device);
+                // VarStore::variables() returns a Result<HashMap<String, Tensor>>
+                if let Ok(vars_map) = vs.variables() {
+                    for (_name, v) in vars_map.iter() {
+                        l2_sum = l2_sum + v.pow(2).sum(tch::Kind::Float);
+                    }
+                }
+                let l2_term = l2_sum * (weight_decay as f32);
+                loss = loss + l2_term;
+            }
 
             // Debug: Check loss values
             let loss_val = f64::try_from(&loss).unwrap_or(f64::NAN);
