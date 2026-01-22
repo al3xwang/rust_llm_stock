@@ -17,7 +17,7 @@ pub struct StockItem {
     // [42-47] Volatility (atr, volatility_5, volatility_20, asi, obv, volume_ratio)
     // [48-51] Momentum (price_momentum_5/10/20, price_position_52w)
     // [52-54] Candlestick sizes (body_size, upper_shadow, lower_shadow)
-    // [55-62] Trend & strength (trend_strength, adx_14, vwap_distance_pct, cmf_20, mfi_14, williams_r_14, aroon_up_25, aroon_down_25)
+    // [55-62] Trend & strength (trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25, aroon_down_25)
     // [63-65] Lagged returns (return_lag_1/2/3)
     // [66-67] Gap features (overnight_gap, gap_pct)
     // [68-69] Volume features (volume_roc_5, volume_spike)
@@ -521,7 +521,7 @@ impl DbStockDataset {
                 record.adx_14.unwrap_or(25.0) as f32,
                 record.vwap_distance_pct.unwrap_or(0.0) as f32,
                 record.cmf_20.unwrap_or(0.0) as f32,
-                record.mfi_14.unwrap_or(50.0) as f32,
+                50.0 as f32,
                 record.williams_r_14.unwrap_or(-50.0) as f32,
                 record.aroon_up_25.unwrap_or(50.0) as f32,
                 record.aroon_down_25.unwrap_or(50.0) as f32,

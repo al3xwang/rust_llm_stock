@@ -587,11 +587,6 @@ impl DbClient {
                         idx += 1;
                         v
                     },
-                    mfi_14: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
                     williams_r_14: {
                         let v = row.get(idx);
                         idx += 1;
@@ -1037,7 +1032,6 @@ impl DbClient {
                     adx_14,
                     vwap_distance_pct,
                     cmf_20,
-                    mfi_14: None,
                     williams_r_14,
                     aroon_up_25,
                     aroon_down_25,
@@ -1303,7 +1297,6 @@ pub struct MlTrainingRecord {
     pub adx_14: Option<f64>,
     pub vwap_distance_pct: Option<f64>,
     pub cmf_20: Option<f64>,
-    pub mfi_14: Option<f64>,
     pub williams_r_14: Option<f64>,
     pub aroon_up_25: Option<f64>,
     pub aroon_down_25: Option<f64>,
@@ -1940,7 +1933,7 @@ impl DbClient {
         let adx_14 = self.calculate_adx(historical_data, current_idx, 14);
         let vwap_distance_pct = self.calculate_vwap_distance(historical_data, current_idx, 20);
         let cmf_20 = self.calculate_cmf(historical_data, current_idx, 20);
-        let mfi_14 = self.calculate_mfi(historical_data, current_idx, 14);
+        // MFI calculation removed due to insufficient reliable historical window
         let williams_r_14 = self.calculate_williams_r(historical_data, current_idx, 14);
         let (aroon_up, aroon_down) = self.calculate_aroon(historical_data, current_idx, 25);
 
@@ -2070,7 +2063,6 @@ impl DbClient {
             adx_14: Some(adx_14),
             vwap_distance_pct: Some(vwap_distance_pct),
             cmf_20: Some(cmf_20),
-            mfi_14: Some(mfi_14),
             williams_r_14: Some(williams_r_14),
             aroon_up_25: Some(aroon_up),
             aroon_down_25: Some(aroon_down),

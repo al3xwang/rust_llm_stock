@@ -933,10 +933,14 @@ async fn insert_feature_row(
             next_day_direction, next_3day_return, next_3day_direction,
             pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days
         ) VALUES (
-            -- 1-126: all columns including HSI, USDCNH, and moneyflow
+            -- 1-125: all columns including HSI, USDCNH, and moneyflow
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,$94,$95,$96,
-            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125,$126
+            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125
         )
+        ON CONFLICT (ts_code, trade_date) DO UPDATE SET
+            industry_avg_return = COALESCE(ml_training_dataset.industry_avg_return, EXCLUDED.industry_avg_return),
+            stock_vs_industry = COALESCE(ml_training_dataset.stock_vs_industry, EXCLUDED.stock_vs_industry),
+            industry_momentum_5d = COALESCE(ml_training_dataset.industry_momentum_5d, EXCLUDED.industry_momentum_5d)
     "#,
     )
     .bind(row.ts_code.clone())
@@ -999,7 +1003,6 @@ async fn insert_feature_row(
     .bind(row.adx_14)
     .bind(row.vwap_distance_pct)
     .bind(row.cmf_20)
-    .bind(row.mfi_14)
     .bind(row.williams_r_14)
     .bind(row.aroon_up_25)
     .bind(row.aroon_down_25)
@@ -1096,7 +1099,7 @@ async fn batch_insert_feature_rows(
                 macd_line, macd_signal, macd_histogram, macd_weekly_line, macd_weekly_signal, macd_monthly_line, macd_monthly_signal,
                 rsi_14, kdj_k, kdj_d, kdj_j, bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b, atr, volatility_5, volatility_20,
                 asi, obv, volume_ratio, price_momentum_5, price_momentum_10, price_momentum_20, price_position_52w, body_size,
-                upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, mfi_14, williams_r_14, aroon_up_25,
+                upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25,
                 aroon_down_25, return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
                 price_roc_5, price_roc_10, price_roc_20, hist_volatility_20, is_doji, is_hammer, is_shooting_star, consecutive_days,
                 index_csi300_pct_chg, index_csi300_vs_ma5_pct, index_csi300_vs_ma20_pct, index_chinext_pct_chg, index_chinext_vs_ma5_pct,
@@ -1113,7 +1116,7 @@ async fn batch_insert_feature_rows(
         );
 
         // Generate value placeholders for each row
-        let cols_per_row = 126;
+        let cols_per_row = 125;
         for (row_idx, _row) in chunk.iter().enumerate() {
             if row_idx > 0 {
                 sql.push_str(", ");
@@ -1128,7 +1131,11 @@ async fn batch_insert_feature_rows(
             sql.push(')');
         }
 
-        sql.push_str(" ON CONFLICT DO NOTHING");
+        // Upsert: for existing rows, update only the newly introduced columns if they are currently NULL
+        sql.push_str(" ON CONFLICT (ts_code, trade_date) DO UPDATE SET \
+            industry_avg_return = COALESCE(ml_training_dataset.industry_avg_return, EXCLUDED.industry_avg_return), \
+            stock_vs_industry = COALESCE(ml_training_dataset.stock_vs_industry, EXCLUDED.stock_vs_industry), \
+            industry_momentum_5d = COALESCE(ml_training_dataset.industry_momentum_5d, EXCLUDED.industry_momentum_5d)");
 
         // Build the query with all bindings
         let mut query = sqlx::query(&sql);
@@ -1195,7 +1202,6 @@ async fn batch_insert_feature_rows(
                 .bind(row.adx_14)
                 .bind(row.vwap_distance_pct)
                 .bind(row.cmf_20)
-                .bind(row.mfi_14)
                 .bind(row.williams_r_14)
                 .bind(row.aroon_up_25)
                 .bind(row.aroon_down_25)
@@ -1480,7 +1486,6 @@ struct FeatureRow {
     adx_14: Option<f64>,
     vwap_distance_pct: Option<f64>,
     cmf_20: Option<f64>,
-    mfi_14: Option<f64>,
     williams_r_14: Option<f64>,
     aroon_up_25: Option<f64>,
     aroon_down_25: Option<f64>,
@@ -2337,12 +2342,7 @@ async fn calculate_features_for_stock_sync(
             None
         };
 
-        // MFI 14
-        let mfi_14 = if highs.len() >= 15 {
-            Some(calculate_mfi(&highs, &lows, &closes, &volumes, 14))
-        } else {
-            None
-        };
+        // MFI removed (insufficient historical data for reliable calculation)
 
         // Williams %R
         let williams_r_14 = if highs.len() >= 14 {
@@ -2600,7 +2600,6 @@ async fn calculate_features_for_stock_sync(
                 adx_14,
                 vwap_distance_pct,
                 cmf_20,
-                mfi_14,
                 williams_r_14,
                 aroon_up_25,
                 aroon_down_25,
@@ -2714,7 +2713,6 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS net_mf_amount DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS smart_money_ratio DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS large_order_flow DOUBLE PRECISION;",
-        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS mfi_14 DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_avg_return DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS stock_vs_industry DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum_5d DOUBLE PRECISION;",
@@ -2785,7 +2783,6 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
             adx_14 DOUBLE PRECISION,
             vwap_distance_pct DOUBLE PRECISION,
             cmf_20 DOUBLE PRECISION,
-            mfi_14 DOUBLE PRECISION,
             williams_r_14 DOUBLE PRECISION,
             aroon_up_25 DOUBLE PRECISION,
             aroon_down_25 DOUBLE PRECISION,

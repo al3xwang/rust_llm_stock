@@ -320,7 +320,7 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
                 r.adx_14.unwrap_or(25.0) as f32,
                 r.vwap_distance_pct.unwrap_or(0.0) as f32,
                 r.cmf_20.unwrap_or(0.0) as f32,
-                r.mfi_14.unwrap_or(50.0) as f32,
+                50.0 as f32,
                 r.williams_r_14.unwrap_or(-50.0) as f32,
                 r.aroon_up_25.unwrap_or(50.0) as f32,
                 r.aroon_down_25.unwrap_or(50.0) as f32,
