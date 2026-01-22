@@ -5,6 +5,9 @@ use rust_llm_stock::{
 use sqlx::{Pool, Postgres};
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use clap::Parser;
+use futures::stream::{self, StreamExt};
 use ta::{
     DataItem, Next,
     indicators::{
@@ -383,6 +386,44 @@ fn calculate_cmf(
     }
 }
 
+/// Calculate Money Flow Index (MFI)
+fn calculate_mfi(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    period: usize,
+) -> f64 {
+    // Need period + 1 data points to compare previous typical price
+    if closes.len() < period + 1 || highs.len() < period + 1 || lows.len() < period + 1 || volumes.len() < period + 1 {
+        return 50.0; // neutral default
+    }
+
+    let len = closes.len();
+    let start = len - period; // include this..len-1
+
+    let mut positive_mf = 0.0;
+    let mut negative_mf = 0.0;
+
+    for i in start..len {
+        let tp = (highs[i] + lows[i] + closes[i]) / 3.0;
+        let prev_tp = (highs[i - 1] + lows[i - 1] + closes[i - 1]) / 3.0;
+        let mf = tp * volumes[i];
+        if tp > prev_tp {
+            positive_mf += mf;
+        } else if tp < prev_tp {
+            negative_mf += mf;
+        }
+    }
+
+    if negative_mf.abs() < 1e-12 {
+        return 100.0;
+    }
+
+    let mfr = positive_mf / negative_mf;
+    100.0 - (100.0 / (1.0 + mfr))
+}
+
 /// Calculate Williams %R
 fn calculate_williams_r(highs: &[f64], lows: &[f64], close: f64, period: usize) -> f64 {
     if highs.len() < period {
@@ -511,8 +552,29 @@ fn count_consecutive_days(closes: &[f64]) -> i32 {
     count
 }
 
+#[derive(Parser, Debug)]
+#[command(name = "dataset_creator")]
+struct Cli {
+    /// Start date (YYYYMMDD) for incremental or test runs
+    #[arg(long)]
+    start_date: Option<String>,
+
+    /// End date (YYYYMMDD) for incremental or test runs
+    #[arg(long)]
+    end_date: Option<String>,
+
+    /// Concurrency level (number of stocks processed concurrently)
+    #[arg(long, default_value_t = 4)]
+    concurrency: usize,
+
+    /// Dry run: don't insert into DB (for testing)
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let cli = Cli::parse();
     let start_time = std::time::Instant::now();
     let dbpool = get_connection().await;
 
@@ -544,6 +606,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     println!("Processing {} stocks for dataset creation", stocks.len());
     eprintln!("[DEBUG] Step 1: After printing stock count");
+
+    // Debug: print a small sample of stocks to verify act_ent_type is fetched from stock_basic
+    for (i, (ts_code, list_date, industry, act_ent_type)) in stocks.iter().take(10).enumerate() {
+        eprintln!(
+            "[DEBUG] Sample stock {}: ts_code={}, list_date={:?}, industry={:?}, act_ent_type={:?}",
+            i, ts_code, list_date, industry, act_ent_type
+        );
+    }
+
     let processing_start = std::time::Instant::now();
 
     // Check max date in ml_training_dataset for incremental backfill
@@ -634,79 +705,190 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let index_data =
         prefetch_index_data(&dbpool, &index_codes, &final_min_date, &final_max_date).await;
 
-    // Process stocks sequentially
+    // Process stocks with optional concurrency
     let total_stocks = stocks.len();
-    println!(
-        "\n=== Processing {} stocks (sequential) ===\n",
-        total_stocks
-    );
 
-    // Simple counters for progress tracking
-    let mut processed_count = 0;
-    let mut skipped_count = 0;
-    let mut total_records = 0;
+    // Final counters (populated by selected execution path)
+    let mut final_processed: usize = 0;
+    let mut final_skipped: usize = 0;
+    let mut final_records: usize = 0;
 
-    // Process each stock one at a time
-    for (idx, (ts_code, list_date, industry, act_ent_type)) in stocks.iter().enumerate() {
-        let stock_timer = std::time::Instant::now();
+    if cli.concurrency <= 1 {
+        println!("\n=== Processing {} stocks (sequential) ===\n", total_stocks);
 
-        let calc_start = std::time::Instant::now();
-        let feature_rows = calculate_features_for_stock_sync(
-            &dbpool,
-            ts_code,
-            list_date.as_deref(),
-            industry.as_deref(),
-            act_ent_type.as_deref(),
-            &industry_perf_data,
-            &final_min_date,
-            &final_max_date,
-            &index_data,
-        )
-        .await;
-        let calc_elapsed = calc_start.elapsed().as_millis();
+        // Simple counters for progress tracking
+        let mut processed_count = 0;
+        let mut skipped_count = 0;
+        let mut total_records = 0;
 
-        if feature_rows.is_empty() {
-            skipped_count += 1;
-            eprintln!("  ⚠️  Stock {} skipped (calc: {}ms)", ts_code, calc_elapsed);
-        } else {
-            // Insert data for this stock
-            let row_count = feature_rows.len();
+        // Process each stock one at a time
+        for (idx, (ts_code, list_date, industry, act_ent_type)) in stocks.iter().enumerate() {
+            let stock_timer = std::time::Instant::now();
 
-            let insert_start = std::time::Instant::now();
-            batch_insert_feature_rows(&dbpool, &feature_rows).await?;
-            let insert_elapsed = insert_start.elapsed().as_millis();
+            let calc_start = std::time::Instant::now();
+            let feature_rows = calculate_features_for_stock_sync(
+                &dbpool,
+                ts_code,
+                list_date.as_deref(),
+                industry.as_deref(),
+                act_ent_type.as_deref(),
+                &industry_perf_data,
+                &final_min_date,
+                &final_max_date,
+                &index_data,
+            )
+            .await;
+            let calc_elapsed = calc_start.elapsed().as_millis();
 
-            processed_count += 1;
-            total_records += row_count;
+            if feature_rows.is_empty() {
+                skipped_count += 1;
+                eprintln!("  ⚠️  Stock {} skipped (calc: {}ms)", ts_code, calc_elapsed);
+            } else {
+                // Insert data for this stock
+                let row_count = feature_rows.len();
 
-            let total_elapsed = stock_timer.elapsed().as_millis();
+                let insert_start = std::time::Instant::now();
+                if !cli.dry_run {
+                    batch_insert_feature_rows(&dbpool, &feature_rows).await?;
+                }
+                let insert_elapsed = insert_start.elapsed().as_millis();
 
-            // Progress logging every 10 stocks for visibility
-            if processed_count % 10 == 0 || processed_count <= 100 {
-                println!(
-                    "  [{}/{}] {} processed: {} rows in {}ms (calc: {}ms, insert: {}ms) - {} total committed",
-                    processed_count,
-                    total_stocks,
-                    ts_code,
-                    row_count,
-                    total_elapsed,
-                    calc_elapsed,
-                    insert_elapsed,
-                    total_records
-                );
-            } else if processed_count % 5 == 0 {
-                // Lightweight logging every 5 stocks
-                println!(
-                    "  [{}/{}] {} - {}ms",
-                    processed_count, total_stocks, ts_code, total_elapsed
-                );
+                processed_count += 1;
+                total_records += row_count;
+
+                let total_elapsed = stock_timer.elapsed().as_millis();
+
+                // Progress logging every 10 stocks for visibility
+                if processed_count % 10 == 0 || processed_count <= 100 {
+                    println!(
+                        "  [{}/{}] {} processed: {} rows in {}ms (calc: {}ms, insert: {}ms) - {} total committed",
+                        processed_count,
+                        total_stocks,
+                        ts_code,
+                        row_count,
+                        total_elapsed,
+                        calc_elapsed,
+                        insert_elapsed,
+                        total_records
+                    );
+                } else if processed_count % 5 == 0 {
+                    // Lightweight logging every 5 stocks
+                    println!(
+                        "  [{}/{}] {} - {}ms",
+                        processed_count, total_stocks, ts_code, total_elapsed
+                    );
+                }
             }
         }
-    }
 
-    let final_processed = processed_count;
-    let final_skipped = skipped_count;
-    let final_records = total_records;
+        final_processed = processed_count;
+        final_skipped = skipped_count;
+        final_records = total_records;
+
+        println!(
+            "\n✅ Processed {} stocks, inserted {} records in {:?}",
+            final_processed,
+            final_records,
+            start_time.elapsed()
+        );
+        if final_skipped > 0 {
+            println!(
+                "⚠️  Skipped {} stocks due to insufficient historical data (< 60 days)",
+                final_skipped
+            );
+        }
+    } else {
+        println!("\n=== Processing {} stocks (concurrency={}) ===\n", total_stocks, cli.concurrency);
+
+        let processed = Arc::new(AtomicUsize::new(0));
+        let skipped = Arc::new(AtomicUsize::new(0));
+        let total_records_atomic = Arc::new(AtomicUsize::new(0));
+
+        let stock_stream = stream::iter(stocks.into_iter())
+            .map(|(ts_code, list_date, industry, act_ent_type)| {
+                let dbpool = dbpool.clone();
+                let industry_perf_data = industry_perf_data.clone();
+                let index_data = index_data.clone();
+                let final_min_date = final_min_date.clone();
+                let final_max_date = final_max_date.clone();
+                let processed = processed.clone();
+                let skipped = skipped.clone();
+                let total_records_atomic = total_records_atomic.clone();
+                let dry_run = cli.dry_run;
+
+                async move {
+                    let calc_start = std::time::Instant::now();
+                    let feature_rows = calculate_features_for_stock_sync(
+                        &dbpool,
+                        &ts_code,
+                        list_date.as_deref(),
+                        industry.as_deref(),
+                        act_ent_type.as_deref(),
+                        &industry_perf_data,
+                        &final_min_date,
+                        &final_max_date,
+                        &index_data,
+                    )
+                    .await;
+                    let calc_elapsed = calc_start.elapsed().as_millis();
+
+                    if feature_rows.is_empty() {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("  ⚠️  Stock {} skipped (calc: {}ms)", ts_code, calc_elapsed);
+                        return Ok::<(), Box<dyn Error + Send + Sync>>(());
+                    }
+
+                    if !dry_run {
+                        batch_insert_feature_rows(&dbpool, &feature_rows).await?;
+                    }
+
+                    let row_count = feature_rows.len();
+                    processed.fetch_add(1, Ordering::Relaxed);
+                    total_records_atomic.fetch_add(row_count, Ordering::Relaxed);
+
+                    let processed_count = processed.load(Ordering::Relaxed);
+                    if processed_count % 10 == 0 || processed_count <= 100 {
+                        println!(
+                            "  [{}/{}] {} processed: {} rows (calc: {}ms) - {} total committed",
+                            processed_count,
+                            total_stocks,
+                            ts_code,
+                            row_count,
+                            calc_elapsed,
+                            total_records_atomic.load(Ordering::Relaxed)
+                        );
+                    }
+
+                    Ok(())
+                }
+            })
+            .buffer_unordered(cli.concurrency);
+
+        // Execute stream and collect errors if any
+        let mut stream = stock_stream;
+        while let Some(res) = stream.next().await {
+            if let Err(e) = res {
+                eprintln!("Error processing stock: {:?}", e);
+            }
+        }
+
+        final_processed = processed.load(Ordering::Relaxed);
+        final_skipped = skipped.load(Ordering::Relaxed);
+        final_records = total_records_atomic.load(Ordering::Relaxed);
+
+        println!(
+            "\n✅ Processed {} stocks, inserted {} records in {:?}",
+            final_processed,
+            final_records,
+            start_time.elapsed()
+        );
+        if final_skipped > 0 {
+            println!(
+                "⚠️  Skipped {} stocks due to insufficient historical data (< 60 days)",
+                final_skipped
+            );
+        }
+    }
 
     println!(
         "\n✅ Processed {} stocks, inserted {} records in {:?}",
@@ -751,9 +933,9 @@ async fn insert_feature_row(
             next_day_direction, next_3day_return, next_3day_direction,
             pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days
         ) VALUES (
-            -- 1-122: all columns including HSI, USDCNH, and moneyflow
+            -- 1-126: all columns including HSI, USDCNH, and moneyflow
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,$94,$95,$96,
-            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122
+            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125,$126
         )
     "#,
     )
@@ -817,6 +999,7 @@ async fn insert_feature_row(
     .bind(row.adx_14)
     .bind(row.vwap_distance_pct)
     .bind(row.cmf_20)
+    .bind(row.mfi_14)
     .bind(row.williams_r_14)
     .bind(row.aroon_up_25)
     .bind(row.aroon_down_25)
@@ -854,6 +1037,9 @@ async fn insert_feature_row(
     .bind(row.net_mf_amount)
     .bind(row.smart_money_ratio)
     .bind(row.large_order_flow)
+    .bind(row.industry_avg_return)
+    .bind(row.stock_vs_industry)
+    .bind(row.industry_momentum_5d)
     .bind(row.turnover_rate)
     .bind(row.turnover_rate_f)
     .bind(row.pe)
@@ -910,14 +1096,14 @@ async fn batch_insert_feature_rows(
                 macd_line, macd_signal, macd_histogram, macd_weekly_line, macd_weekly_signal, macd_monthly_line, macd_monthly_signal,
                 rsi_14, kdj_k, kdj_d, kdj_j, bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b, atr, volatility_5, volatility_20,
                 asi, obv, volume_ratio, price_momentum_5, price_momentum_10, price_momentum_20, price_position_52w, body_size,
-                upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25,
+                upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, mfi_14, williams_r_14, aroon_up_25,
                 aroon_down_25, return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
                 price_roc_5, price_roc_10, price_roc_20, hist_volatility_20, is_doji, is_hammer, is_shooting_star, consecutive_days,
                 index_csi300_pct_chg, index_csi300_vs_ma5_pct, index_csi300_vs_ma20_pct, index_chinext_pct_chg, index_chinext_vs_ma5_pct,
                 index_chinext_vs_ma20_pct, index_xin9_pct_chg, index_xin9_vs_ma5_pct, index_xin9_vs_ma20_pct,
                 index_hsi_pct_chg, index_hsi_vs_ma5_pct, index_hsi_vs_ma20_pct,
                 fx_usdcnh_pct_chg, fx_usdcnh_vs_ma5_pct, fx_usdcnh_vs_ma20_pct,
-                net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow,
+                net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow, industry_avg_return, stock_vs_industry, industry_momentum_5d,
                 turnover_rate, turnover_rate_f, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share,
                 free_share, total_mv, circ_mv,
                 vol_percentile, high_vol_regime, next_day_return,
@@ -927,7 +1113,7 @@ async fn batch_insert_feature_rows(
         );
 
         // Generate value placeholders for each row
-        let cols_per_row = 122;
+        let cols_per_row = 126;
         for (row_idx, _row) in chunk.iter().enumerate() {
             if row_idx > 0 {
                 sql.push_str(", ");
@@ -1009,6 +1195,7 @@ async fn batch_insert_feature_rows(
                 .bind(row.adx_14)
                 .bind(row.vwap_distance_pct)
                 .bind(row.cmf_20)
+                .bind(row.mfi_14)
                 .bind(row.williams_r_14)
                 .bind(row.aroon_up_25)
                 .bind(row.aroon_down_25)
@@ -1046,6 +1233,9 @@ async fn batch_insert_feature_rows(
                 .bind(row.net_mf_amount)
                 .bind(row.smart_money_ratio)
                 .bind(row.large_order_flow)
+                .bind(row.industry_avg_return)
+                .bind(row.stock_vs_industry)
+                .bind(row.industry_momentum_5d)
                 .bind(row.turnover_rate)
                 .bind(row.turnover_rate_f)
                 .bind(row.pe)
@@ -1188,6 +1378,44 @@ async fn prefetch_index_data(
     map
 }
 
+/// Pre-fetch industry performance (average daily return and 5-day industry momentum)
+async fn prefetch_industry_performance(
+    pool: &Pool<Postgres>,
+    min_date: &str,
+    max_date: &str,
+) -> std::collections::HashMap<(String, String), (f64, f64)> {
+    // Compute per-industry daily average return then compute 5-day rolling average per industry
+    let rows = sqlx::query!(
+        r#"
+        WITH daily_industry AS (
+            SELECT sb.industry, sd.trade_date, AVG(sd.pct_chg::DOUBLE PRECISION) AS avg_return
+            FROM stock_daily sd
+            JOIN stock_basic sb ON sd.ts_code = sb.ts_code
+            WHERE sd.trade_date >= $1 AND sd.trade_date <= $2 AND sb.industry IS NOT NULL
+            GROUP BY sb.industry, sd.trade_date
+            ORDER BY sb.industry, sd.trade_date
+        )
+        SELECT industry, trade_date, avg_return,
+            AVG(avg_return) OVER (PARTITION BY industry ORDER BY trade_date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS avg_5d
+        FROM daily_industry
+        "#,
+        min_date,
+        max_date
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut map = std::collections::HashMap::new();
+    for r in rows {
+        map.insert(
+            (r.industry.clone().unwrap_or_else(|| "UNKNOWN".to_string()), r.trade_date.clone()),
+            (r.avg_return.unwrap_or(0.0), r.avg_5d.unwrap_or(0.0)),
+        );
+    }
+    map
+}
+
 // --- Add these stubs near the top of your file ---
 
 #[derive(Clone, Debug)]
@@ -1252,6 +1480,7 @@ struct FeatureRow {
     adx_14: Option<f64>,
     vwap_distance_pct: Option<f64>,
     cmf_20: Option<f64>,
+    mfi_14: Option<f64>,
     williams_r_14: Option<f64>,
     aroon_up_25: Option<f64>,
     aroon_down_25: Option<f64>,
@@ -1291,6 +1520,11 @@ struct FeatureRow {
     net_mf_amount: Option<f64>,
     smart_money_ratio: Option<f64>,
     large_order_flow: Option<f64>,
+
+    // Industry features
+    industry_avg_return: Option<f64>,
+    stock_vs_industry: Option<f64>,
+    industry_momentum_5d: Option<f64>,
 
     vol_percentile: Option<f64>,
     high_vol_regime: Option<i16>,
@@ -1461,9 +1695,7 @@ async fn calculate_features_for_stock_sync(
     list_date: Option<&str>,
     industry: Option<&str>,
     act_ent_type: Option<&str>,
-    industry_perf_data: &std::sync::Arc<
-        std::collections::HashMap<(String, String, String), (f64, f64)>,
-    >,
+    industry_perf_data: &std::sync::Arc<std::collections::HashMap<(String, String), (f64, f64)>>,
     min_date: &str,
     max_date: &str,
     index_data: &HashMap<(String, String), IndexDaily>,
@@ -1905,31 +2137,6 @@ async fn calculate_features_for_stock_sync(
             None
         };
 
-        // CMF, MFI
-        let cmf_20 = if highs.len() >= 20 {
-            Some(calculate_cmf(
-                &highs.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
-                &lows.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
-                &closes
-                    .iter()
-                    .map(|&v| Some(v))
-                    .collect::<Vec<Option<f64>>>(),
-                &volumes
-                    .iter()
-                    .map(|&v| Some(v))
-                    .collect::<Vec<Option<f64>>>(),
-                20,
-            ))
-        } else {
-            None
-        };
-
-        // Williams %R
-        let williams_r_14 = if highs.len() >= 14 {
-            Some(calculate_williams_r(&highs, &lows, day.close, 14))
-        } else {
-            None
-        };
 
         // Aroon
         let (aroon_up_25, aroon_down_25) = if highs.len() >= 25 {
@@ -2117,6 +2324,49 @@ async fn calculate_features_for_stock_sync(
         // --- Map daily_basic fields by (ts_code, trade_date) ---
         let daily_basic = daily_basic_map.get(&(ts_code.to_string(), day.trade_date.clone()));
 
+        // CMF (already computed earlier via function) - ensure we set it here
+        let cmf_20 = if highs.len() >= 20 {
+            Some(calculate_cmf(
+                &highs.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
+                &lows.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
+                &closes.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
+                &volumes.iter().map(|&v| Some(v)).collect::<Vec<Option<f64>>>(),
+                20,
+            ))
+        } else {
+            None
+        };
+
+        // MFI 14
+        let mfi_14 = if highs.len() >= 15 {
+            Some(calculate_mfi(&highs, &lows, &closes, &volumes, 14))
+        } else {
+            None
+        };
+
+        // Williams %R
+        let williams_r_14 = if highs.len() >= 14 {
+            Some(calculate_williams_r(&highs, &lows, day.close, 14))
+        } else {
+            None
+        };
+
+        // Industry features (lookup from pre-fetched map)
+        let (industry_avg_return, industry_momentum_5d) = if let Some(ind) = industry {
+            if let Some((avg, mom5)) = industry_perf_data.get(&(ind.to_string(), day.trade_date.clone())) {
+                (Some(*avg), Some(*mom5))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        let stock_vs_industry = match (industry_avg_return, close_pct) {
+            (Some(ind_avg), Some(cp)) => Some(cp - ind_avg),
+            _ => None,
+        };
+
         // ========== NEW: 5 Predictive Features for Accuracy Improvement ==========
 
         // Feature 1: PE Percentile (52-week)
@@ -2293,7 +2543,7 @@ async fn calculate_features_for_stock_sync(
                 ts_code: ts_code.to_string(),
                 trade_date: day.trade_date.clone(),
                 industry: industry.map(|s| s.to_string()),
-                act_ent_type: act_ent_type.map(|s| s.to_string()),
+                act_ent_type: Some(act_ent_type.unwrap_or("UNKNOWN").to_string()),
                 volume: day.volume,
                 amount: day.amount,
                 month,
@@ -2350,6 +2600,7 @@ async fn calculate_features_for_stock_sync(
                 adx_14,
                 vwap_distance_pct,
                 cmf_20,
+                mfi_14,
                 williams_r_14,
                 aroon_up_25,
                 aroon_down_25,
@@ -2389,6 +2640,11 @@ async fn calculate_features_for_stock_sync(
                 net_mf_amount,
                 smart_money_ratio,
                 large_order_flow,
+
+                // --- Industry features ---
+                industry_avg_return,
+                stock_vs_industry,
+                industry_momentum_5d,
 
                 // --- Map daily_basic fields by date ---
                 turnover_rate: daily_basic.as_ref().map(|db| db.turnover_rate),
@@ -2458,6 +2714,10 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS net_mf_amount DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS smart_money_ratio DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS large_order_flow DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS mfi_14 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_avg_return DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS stock_vs_industry DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum_5d DOUBLE PRECISION;",
     ];
 
     // Run CREATE with PRIMARY KEY
@@ -2525,6 +2785,7 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
             adx_14 DOUBLE PRECISION,
             vwap_distance_pct DOUBLE PRECISION,
             cmf_20 DOUBLE PRECISION,
+            mfi_14 DOUBLE PRECISION,
             williams_r_14 DOUBLE PRECISION,
             aroon_up_25 DOUBLE PRECISION,
             aroon_down_25 DOUBLE PRECISION,
