@@ -83,9 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Skipping full training_data.csv export — this file is not used for model training.
     println!("Skipping export of training_data.csv (disabled)");
 
-    println!(
-        csv_cols.len()
-    );
+    println!("CSV columns: {}", csv_cols.len());
 
     // Group rows by ts_code
     use std::collections::HashMap;
