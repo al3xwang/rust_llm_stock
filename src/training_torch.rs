@@ -341,13 +341,14 @@ fn train_epoch_stream(
             if weight_decay > 0.0 {
                 // Sum squares of variables (if accessible)
                 let mut l2_sum = Tensor::from(0.0).to_device(device);
-                // VarStore::variables() returns a Result<HashMap<String, Tensor>>
-                if let Ok(vars_map) = vs.variables() {
-                    for (_name, v) in vars_map.iter() {
-                        l2_sum = l2_sum + v.pow(2).sum(tch::Kind::Float);
-                    }
+                // VarStore::variables() returns a HashMap<String, Tensor>
+                let vars_map = vs.variables();
+                for (_name, v) in vars_map.iter() {
+                    let s = v.pow(2).sum(tch::Kind::Float);
+                    l2_sum = l2_sum + s;
                 }
-                let l2_term = l2_sum * (weight_decay as f32);
+                // Use f64 to match tensor scalar conversion expectations
+                let l2_term = l2_sum * (weight_decay as f64);
                 loss = loss + l2_term;
             }
 

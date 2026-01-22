@@ -9,6 +9,7 @@ pub struct TorchStockModel {
     output_proj_3day: nn::Linear,     // 3-day prediction head (NEW)
     confidence_head_1day: nn::Linear, // 1-day confidence
     confidence_head_3day: nn::Linear, // 3-day confidence (NEW)
+    dropout: f32,
 }
 
 struct TransformerEncoder {
@@ -64,6 +65,7 @@ impl TorchStockModel {
                 config.d_model,
                 config.n_heads,
                 config.d_ff,
+                config.dropout,
             ));
         }
 
@@ -107,6 +109,7 @@ impl TorchStockModel {
             output_proj_3day,
             confidence_head_1day,
             confidence_head_3day,
+            dropout: config.dropout,
         }
     }
 
@@ -121,7 +124,7 @@ impl TorchStockModel {
     /// Returns: (pred_1day, pred_3day, conf_1day, conf_3day) where confidence is in range [0, 1]
     pub fn forward_dual(&self, input: &Tensor, train: bool) -> (Tensor, Tensor, Tensor, Tensor) {
         let x = self.input_proj.forward(input);
-        let x = if train { x.dropout(config.dropout, true) } else { x };
+        let x = if train { x.dropout(self.dropout, true) } else { x };
 
         // LSTM for temporal processing if enabled
         let x = if let (Some(lstm), Some(proj)) = (&self.lstm, &self.lstm_to_transformer) {
@@ -161,13 +164,13 @@ impl TorchStockModel {
 }
 
 impl TransformerEncoderLayer {
-    fn new(vs: &nn::Path, d_model: i64, _n_heads: i64, d_ff: i64) -> Self {
+    fn new(vs: &nn::Path, d_model: i64, _n_heads: i64, d_ff: i64, dropout: f32) -> Self {
         let self_attn = nn::linear(vs / "attn", d_model, d_model, Default::default());
 
         let feed_forward = nn::seq()
             .add(nn::linear(vs / "ff1", d_model, d_ff, Default::default()))
             .add_fn(|x: &Tensor| x.relu())
-            .add_fn(move |x: &Tensor| x.dropout(config.dropout, true))
+            .add_fn(move |x: &Tensor| x.dropout(dropout, true))
             .add(nn::linear(vs / "ff2", d_ff, d_model, Default::default()));
 
         let norm1 = nn::layer_norm(vs / "norm1", vec![d_model], Default::default());
