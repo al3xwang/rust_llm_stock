@@ -1,0 +1,251 @@
+   52  ls *.sh
+   56  grep -A20 "trade_cal\|calendar" stock-miner/src/bin/pullall-daily.rs | head -40
+   57  find . -name "*.sql" -type f | xargs grep -l "trade_cal" 2>/dev/null | head -5
+   61  cd /Users/alex/stock-analysis-workspace/stock-miner && if [ -f .env ]; then echo "Found .env in stock-miner"; cat .env | head -20; else echo "No .env in stock-miner"; fi
+   62  cat .env
+   63  cd /Users/alex/stock-analysis-workspace && find . -name ".env*" -o -name "*.env" 2>/dev/null | grep -v node_modules | head -10
+   67  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && cargo build --bin ingest_tushare_stock --release 2>&1 | tail -20
+   68  cd /Users/alex/stock-analysis-workspace && grep -r "TUSHARE" --include="*.sh" --include="*.env" --include="*.md" . 2>/dev/null | grep -v "your_token" | head -5
+   72  ./update_stock_data.sh
+   79  ./update_stock_data.sh 2>&1
+   81  pwd && ls -la | head -20
+   82  cargo build --release --bin ingest_tushare_stock 2>&1 | tail -30
+   83  ls -la target/release/ingest_tushare_stock 2>/dev/null || echo "Binary not found at target/release/"
+   85  cargo build --release --bin ingest_tushare_stock 2>&1 | grep -E "Compiling|Finished|error" | tail -20
+   86  cd /Users/alex/stock-analysis-workspace && find . -name "ingest_tushare_stock" -type f 2>/dev/null
+   87  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && ./update_stock_data.sh 2>&1 | head -40
+   88  ./update_stock_data.sh 2>&1 | head -80
+   89  export $(cat /Users/alex/stock-analysis-workspace/rust_llm_stock/.env | xargs) && psql "$DATABASE_URL" -c "\\d stock_basic" 2>/dev/null | head -50
+   91  ./update_stock_data.sh 2>&1
+   92  cd /Users/alex/stock-analysis-workspace && grep -r "\"daily\"" --include="*.rs" --include="*.sql" | grep -v "daily_" | grep -v "daily\." | head -20
+   94  cargo check --bin pullall-daily 2>&1 | tail -20
+   95  cargo check --bin create_adjusted_daily --bin create_testing_dataset 2>&1 | grep -E "Finished|error\[E"
+   96  echo "=== Files Updated ===" && grep -l "stock_daily" src/bin/*.rs INGESTION_GUIDE.md && echo "" && echo "=== Verification ===" && cargo check 2>&1 | grep -E "Finished|error\[E" | head -5
+   97  cargo check --lib 2>&1 | tail -5
+  102  ./update_stock_data.sh 2>&1
+  103  export $(cat .env | xargs) && ../target/release/ingest_tushare_stock 2>&1 | head -100
+  104  cd /Users/alex/stock-analysis-workspace && find . -name "*calendar*" -o -name "*trade_cal*" 2>/dev/null | grep -E "\.(rs|sql)" | head -10
+  105  export $(cat /Users/alex/stock-analysis-workspace/rust_llm_stock/.env | xargs) && psql "$DATABASE_URL" -c "\d trade_cal" 2>&1 | head -20
+  106  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && grep -r "trade_cal" ../stock-miner/src/ 2>/dev/null | head -10
+  108  export $(cat .env | xargs) && ../target/release/pullall-daily 2>&1 | head -200
+  109  cargo build --release --bin pullall-daily 2>&1 | tail -30
+  110  export $(cat .env | xargs) && ../target/release/pullall-daily 2>&1 | head -100
+  112  grep -r "adjusted_daily" src/ --include="*.rs" | head -30
+  117  cargo check --bin create_adjusted_daily 2>&1 | tail -20
+  118  cargo check --bin dataset_creator 2>&1 | tail -10
+  119  find . -name "*.sql" -type f -exec grep -l "adjusted_daily" {} \; 2>/dev/null
+  120  grep -n "adjusted_stock_daily" src/bin/create_adjusted_daily.rs | head -10
+  121  export $(cat /Users/alex/stock-analysis-workspace/rust_llm_stock/.env | xargs) && psql "$DATABASE_URL" -c "SELECT ts_code, trade_date, close FROM adjusted_stock_daily ORDER BY trade_date DESC LIMIT 5"
+  122  ls *.sh
+  123  ./rename_adjusted_daily_table.sh
+  124  clear
+  125  cargo build --release --bin create_adjusted_daily 2>&1 | tail -20
+  126  export $(cat .env | xargs) && echo "Running create_adjusted_daily to populate pct_chg values..." && ../target/release/create_adjusted_daily 2>&1 | head -50
+  127  ps aux | grep create_adjusted_daily | grep -v grep
+  128  export $(cat /Users/alex/stock-analysis-workspace/rust_llm_stock/.env | xargs) && psql "$DATABASE_URL" -c "SELECT COUNT(*) as total_records, COUNT(pct_chg) as non_null_pct_chg, COUNT(*) - COUNT(pct_chg) as null_pct_chg FROM adjusted_stock_daily"
+  129  export $(cat .env | xargs) && nohup ../target/release/create_adjusted_daily > create_adjusted_output.log 2>&1 &
+  130  tail -20 create_adjusted_output.log
+  131  cargo build --release --bin update_adjusted_daily 2>&1 | tail -20
+  132  export $(cat .env | xargs) && ../target/release/update_adjusted_daily 30 2>&1 | head -50
+  136  cargo check --bin dataset_creator 2>&1 | tail -40
+  139  cargo check --bin ingest_macro_daily 2>&1 | tail -60
+  140  cargo check --bin dataset_creator 2>&1 | grep -E "^(error|warning:.*dataset_creator|    Finished)" | head -20
+  141  cargo check --bin dataset_creator 2>&1 | tail -40
+  142  cargo check --bin pullall-index-daily 2>&1 | tail -20
+  145  export $(cat .env | xargs) && psql -d research -U postgres -c "SELECT ts_code, base_date, fullname FROM index_basic WHERE ts_code IN ('000300.SH', '000680.SH', '000001.SH', '399001.SZ', '399006.SZ', '932000.CSI') ORDER BY ts_code;"
+  146  export $(cat .env | xargs) && psql -d research -U postgres -c "SELECT ts_code, COUNT(*) as record_count, MIN(trade_date) as min_date, MAX(trade_date) as max_date FROM index_daily WHERE ts_code IN ('000300.SH', '000680.SH', '000001.SH', '399001.SZ', '399006.SZ', '932000.CSI') GROUP BY ts_code ORDER BY ts_code;"
+  147  cargo check --bin pullall-index-daily 2>&1 | grep -E "^(error|warning:.*pullall|    Finished)"
+  148  export $(cat .env | xargs) && cargo run --bin pullall-index-daily --release 2>&1 | head -80
+  152  cd "/Users/alex/stock-analysis-workspace/stock-miner" && echo "Now in $PWD"
+  155  if [[ -z "$DATABASE_URL" ]]; then export DATABASE_URL="postgresql://postgres:12341234@localhost:5432/research"; fi
+  162  if [[ -z "$DATABASE_URL" ]]; then export DATABASE_URL="postgresql://postgres:12341234@localhost:5432/research"; fi
+  170  RUST_LOG="info,stock_rust=debug" cargo run --bin pullall-index-daily --release 2>&1 | tee "$LOG"
+  172  echo "Starting new terminal session at $(date)"
+  179  export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}"
+  182  cd stock-miner
+  186  cargo run --bin pullall-index-daily --release 2>&1 | tee "$LOG"
+  190  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, MAX(trade_date) AS last_date FROM index_daily GROUP BY ts_code ORDER BY ts_code;" | cat
+  191  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MAX(trade_date) AS max_date FROM index_daily;" | cat
+  192  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT COUNT(*) AS rows_on_max_date FROM index_daily WHERE trade_date = (SELECT MAX(trade_date) FROM index_daily);" | cat
+  194  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='000680.SH';" | cat
+  195  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, trade_date, open, high, low, close, vol FROM index_daily WHERE ts_code='000680.SH' ORDER BY trade_date ASC LIMIT 5;" | cat
+  196  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE ts_code='000680.SH';" | cat
+  197  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='000680.SH';" | cat
+  198  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, trade_date, open, high, low, close, vol FROM index_daily WHERE ts_code='000680.SH' ORDER BY trade_date ASC LIMIT 5;" | cat
+  199  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE ts_code='000680.SH';" | cat
+  200  set -e
+  201  cd /Users/alex/stock-analysis-workspace/stock-miner
+  202  ls -lt logs | head -20 | cat
+  203  LATEST=$(ls -t logs | grep -E "manual_pull_index_|daily_update_" | head -1)
+  204  [ -n "$LATEST" ] && echo "Latest log: $LATEST" && grep -n "000680.SH" "logs/$LATEST" | head -50 || echo "No matching logs found"
+  205  set -e
+  206  cd /Users/alex/stock-analysis-workspace/stock-miner
+  207  ls -lt logs | head -20 | cat
+  208  LATEST=$(ls -t logs | grep -E "manual_pull_index_|daily_update_" | head -1)
+  209  if [[ -n "$LATEST" ]]; then echo "Latest log: $LATEST"; grep -n "000680.SH" "logs/$LATEST" | head -50; else echo "No matching logs found"; fi
+  210  set -e
+  211  cd /Users/alex/stock-analysis-workspace/stock-miner
+  212  ls -lt logs | head -20 | cat
+  213  grep -R "000680.SH" logs | tail -50 | cat
+  214  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, MIN(trade_date) AS min_date, MAX(trade_date) AS max_date FROM index_daily WHERE ts_code IN ('000300.SH','399006.SZ','000680.SH','830009.XI') GROUP BY ts_code ORDER BY ts_code;" | cat
+  215  set -e
+  216  cd /Users/alex/stock-analysis-workspace/stock-miner
+  217  cargo build --release --bin pullall-index-daily | cat
+  218  cd /Users/alex/stock-analysis-workspace/rust_llm_stock
+  219  cargo build --release --bin pullall-index-daily | cat
+  220  set -e
+  221  cd "/Users/alex/stock-analysis-workspace"
+  222  if [[ -f ./.env ]]; then set -a; . ./.env; set +a; fi
+  223  if [[ -f ./stock-miner/.env ]]; then set -a; . ./stock-miner/.env; set +a; fi
+  224  export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}"
+  225  export RUST_LOG="info,stock_rust=debug"
+  226  psql "$DATABASE_URL" -c "SELECT 1" | cat
+  227  cd stock-miner
+  228  mkdir -p logs
+  229  TS=$(date +%Y%m%d_%H%M%S)
+  230  LOG="logs/manual_pull_index_${TS}.log"
+  231  cargo run --release --bin pullall-index-daily 2>&1 | tee "$LOG"
+  232  set -e
+  233  echo "Starting a fresh verification session at $(date)"
+  234  set -e
+  235  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='399006.SZ';" | cat
+  236  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, MIN(trade_date) AS min_date, MAX(trade_date) AS max_date FROM index_daily WHERE ts_code IN ('000300.SH','399006.SZ','830009.XI') GROUP BY ts_code ORDER BY ts_code;" | cat
+  237  set -e
+  238  cd "/Users/alex/stock-analysis-workspace"
+  239  if [[ -f ./.env ]]; then set -a; . ./.env; set +a; fi
+  240  if [[ -f ./rust_llm_stock/.env ]]; then set -a; . ./rust_llm_stock/.env; set +a; fi
+  241  export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}"
+  242  export RUST_LOG="info,rust_llm_stock=debug"
+  243  psql "$DATABASE_URL" -c "SELECT 1" | cat
+  244  mkdir -p rust_llm_stock/logs
+  245  TS=$(date +%Y%m%d_%H%M%S)
+  246  LOG="rust_llm_stock/logs/pull_index_${TS}.log"
+  247  cargo run --release -p rust_llm_stock --bin pullall-index-daily 2>&1 | tee "$LOG"
+  248  echo "Log saved to: $LOG"
+  249  set -e
+  250  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='000300.SH';" | cat
+  251  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='399006.SZ';" | cat
+  252  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='830009.XI';" | cat
+  253  set -e
+  254  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE ts_code='830009.XI';" | cat
+  255  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT MIN(trade_date) AS min_date, MAX(trade_date) AS max_date, COUNT(*) AS rows FROM index_daily WHERE ts_code='830009.XI';" | cat
+  256  set -e
+  257  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE name ILIKE '%A50%' OR name ILIKE '%富时%';" | cat
+  258  set -e
+  259  cd /Users/alex/stock-analysis-workspace/rust_llm_stock
+  260  cargo build --release --bin pullall-index-daily | cat
+  261  set -e
+  262  cd /Users/alex/stock-analysis-workspace/rust_llm_stock
+  263  cargo build --release --bin pullall-index-daily | cat
+  264  set -e
+  265  export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}"
+  266  psql "$DATABASE_URL" -c "SELECT COUNT(*) AS index_basic_rows FROM index_basic;" | cat
+  267  psql "$DATABASE_URL" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE ts_code IN ('000300.SH','399006.SZ','000001.SH','399001.SZ','932000.CSI','830002.XI','830009.XI','000680.SH') ORDER BY ts_code;" | cat
+  268  psql "$DATABASE_URL" -c "SELECT ts_code, name, base_date, list_date FROM index_basic WHERE name ILIKE '%A50%' OR name ILIKE '%富时%' ORDER BY name LIMIT 50;" | cat
+  269  cd /Users/alex/stock-analysis-workspace
+  270  cargo run --release -p rust_llm_stock --bin pullall-index-daily
+  271  psql "${DATABASE_URL:-postgresql://postgres:12341234@localhost:5432/research}" -c "SELECT ts_code, MIN(trade_date) AS min_date, MAX(trade_date) AS max_date
+  272   FROM index_daily
+  273   WHERE ts_code IN ('000300.SH','399006.SZ','000001.SH','399001.SZ','932000.CSI','830002.XI')
+  274  cargo build --release -p rust_llm_stock --bin pullall-index-global
+  275  cd /Users/alex/stock-analysis-workspace && cargo build --release -p rust_llm_stock --bin pullall-index-global
+  276  cargo run --release -p rust_llm_stock --bin pullall-index-global
+  277  psql postgresql://postgres:12341234@localhost:5432/research -c "SELECT ts_code, name FROM index_basic WHERE ts_code LIKE '%XIN%' OR ts_code LIKE '%HSI%' OR name LIKE '%A50%' OR name LIKE '%恒生%' ORDER BY ts_code;"
+  278  cargo run --bin dataset_creator --release 2>&1 | head -100
+  279  timeout 30 cargo run --bin dataset_creator --release 2>&1 | grep -E "(Processing|Created|Error|error|SUCCESS|FAILED|Stock \[)" | head -50
+  280  cargo run --bin dataset_creator --release 2>&1 | tail -50
+  281  grep -A 200 "CREATE TABLE ml_training_dataset" src/bin/dataset_creator.rs | grep -E "^\s+[a-z_]+ (VARCHAR|DOUBLE|SMALLINT|INTEGER|BOOLEAN|SERIAL|TIMESTAMP)" | wc -l
+  282  sed -n '2194,2244p' src/bin/dataset_creator.rs | grep -v "INSERT\|VALUES" | tr ',' '\n' | grep -v "^[[:space:]]*$" | wc -l
+  283  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "DROP TABLE IF EXISTS ml_training_dataset CASCADE;"
+  284  cargo build --bin dataset_creator --release 2>&1 | tail -5
+  285  timeout 60 cargo run --bin dataset_creator --release 2>&1 | tail -50
+  286  cargo run --bin dataset_creator --release 2>&1 | tail -60
+  287  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "SELECT column_name FROM information_schema.columns WHERE table_name = 'ml_training_dataset' ORDER BY ordinal_position;" | wc -l
+  288  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "SELECT column_name FROM information_schema.columns WHERE table_name = 'ml_training_dataset' AND column_name NOT IN ('id', 'created_at') ORDER BY ordinal_position;"
+  289  cargo run --bin dataset_creator --release 2>&1 | head -150
+  290  sleep 8 && cd /Users/alex/stock-analysis-workspace/rust_llm_stock && PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "SELECT COUNT(*) as data_columns FROM information_schema.columns WHERE table_name = 'ml_training_dataset' AND column_name NOT IN ('id', 'created_at');"
+  291  ps aux | grep dataset_creator | grep -v grep
+  292  cargo run --bin dataset_creator --release 2>&1 | tee dataset_run.log
+  293  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "SELECT column_name FROM information_schema.columns WHERE table_name = 'ml_training_dataset' ORDER BY ordinal_position;" | wc -l
+  294  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -t -c "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'ml_training_dataset';"
+  295  grep -A 50 "INSERT INTO ml_training_dataset" src/bin/dataset_creator.rs | grep -oP '^\s+\K\w+(?=,)' | head -60
+  296  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && cat > /tmp/count_columns.py << 'EOF'
+  297  python3 /tmp/count_columns.py
+  298  PGPASSWORD=12341234 psql -U postgres -h 127.0.0.1 -d research -c "SELECT column_name FROM information_schema.columns WHERE table_name = 'ml_training_dataset' ORDER BY ordinal_position;"
+  299  cd /Users/alex/stock-analysis-workspace && cargo check -p rust_llm_stock --bin dataset_creator 2>&1 | tail -20
+  300  cargo run --release -p rust_llm_stock --bin dataset_creator 2>&1 | tee dataset_creator.log | tail -100
+  301  cargo run --release -p rust_llm_stock --bin dataset_creator 2>&1 | tee dataset_creator_restart.log
+  302  ssh 10.0.0.14
+  312  cargo run --release -p rust_llm_stock --bin dataset_creator
+  314  cd /Users/alex/stock-analysis-workspace && find . -name "dataset_creator" -type f 2>/dev/null
+  315  ./target/release/dataset_creator 2>&1 | head -50
+  319  grep '$1, $2, $3' src/bin/dataset_creator.rs -A 10
+  320  awk '/\.bind\(ts_code\)/,/\.execute\(&mut \*tx\)/' src/bin/dataset_creator.rs | grep '\.bind(' | wc -l
+  321  awk '/CREATE TABLE ml_training_dataset/,/CONSTRAINT ml_training_dataset_unique/' src/bin/dataset_creator.rs | grep -E "^\s+[a-z_]+" | grep -v "id SERIAL\|created_at TIMESTAMP\|CONSTRAINT" | wc -l
+  322  awk '/CREATE TABLE ml_training_dataset/,/created_at TIMESTAMP/' src/bin/dataset_creator.rs | grep -oE '^\s+[a-z_0-9]+' | sed 's/^\s\+//' | grep -v "^id$\|^created_at$" > /tmp/create_cols.txt && awk '/INSERT INTO ml_training_dataset \(/,/next_day_direction$/' src/bin/dataset_creator.rs | grep -oE '^\s+[a-z_0-9]+' | sed 's/^\s\+//' | sed 's/,$//' > /tmp/insert_cols.txt && echo "CREATE TABLE columns:" && wc -l /tmp/create_cols.txt && echo "INSERT columns:" && wc -l /tmp/insert_cols.txt
+  323  comm -23 <(awk '/CREATE TABLE ml_training_dataset/,/created_at TIMESTAMP/' src/bin/dataset_creator.rs | grep -E '^\s+[a-z_][a-z_0-9]*\s+(VARCHAR|DOUBLE|SMALLINT|INTEGER|BOOLEAN)' | awk '{print $1}' | sort) <(awk '/INSERT INTO ml_training_dataset \(/,/\) VALUES/' src/bin/dataset_creator.rs | grep -oE '[a-z_][a-z_0-9]+' | sort -u | head -93)
+  324  cd /Users/alex/stock-analysis-workspace && cargo build --release -p rust_llm_stock --bin dataset_creator 2>&1 | tail -20
+  325  ./target/release/dataset_creator 2>&1 | head -60
+  326  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && awk '/INSERT INTO ml_training_dataset \(/,/\) VALUES \(/' src/bin/dataset_creator.rs | grep -v "INSERT\|VALUES" | sed 's/^[[:space:]]*//' | tr ',' '\n' | grep -v '^$' | grep -v '^--' | wc -l
+  327  cd /Users/alex/stock-analysis-workspace && cargo build --release -p rust_llm_stock --bin dataset_creator 2>&1 | tail -5 && ./target/release/dataset_creator 2>&1 | head -70
+  328  cd /Users/alex/stock-analysis-workspace/rust_llm_stock && awk '/\.bind\(ts_code\)/,/\.execute\(&mut \*tx\)/' src/bin/dataset_creator.rs | grep -n '\.bind(' | tail -5
+  329  grep -n "INSERT INTO ml_training_dataset" src/bin/dataset_creator.rs
+  330  awk 'NR>=2194 && NR<=2520' src/bin/dataset_creator.rs | grep '\.bind(' | wc -l
+  331  cd /Users/alex/stock-analysis-workspace && cargo build --release -p rust_llm_stock --bin dataset_creator 2>&1 | tail -5 && timeout 30 ./target/release/dataset_creator 2>&1 | head -80
+  332  ./target/release/dataset_creator 2>&1 | head -80
+  333  cargo build --release -p rust_llm_stock --bin dataset_creator 2>&1 | tail -10
+  334  ./target/release/dataset_creator 2>&1 | head -100
+  336  cd /Users/alex/stock-analysis-workspace && nohup ./target/release/dataset_creator > dataset_creator.log 2>&1 &
+  340  ps aux | grep -E "dataset_creator|PID.*5968" | grep -v grep && echo "---" && tail -20 dataset_creator.log
+  341  psql postgresql://postgres:12341234@localhost:5432/research -c "SELECT COUNT(*) as total_records FROM ml_training_dataset;" -c "SELECT COUNT(DISTINCT ts_code) as unique_stocks FROM ml_training_dataset;" -c "SELECT MIN(trade_date) as earliest, MAX(trade_date) as latest FROM ml_training_dataset;"
+  342  psql postgresql://postgres:12341234@localhost:5432/research -c "\d ml_training_dataset" | head -150
+  343  cd /Users/alex/stock-analysis-workspace && psql postgresql://postgres:12341234@localhost:5432/research -c "
+  352  FROM ml_training_dataset;"
+  353  cd /Users/alex/stock-analysis-workspace && psql postgresql://postgres:12341234@localhost:5432/research -c "
+  357    ROUND(COUNT(*)::numeric / SUM(COUNT(*)) OVER() * 100, 2) as percentage
+  362  cd /Users/alex/stock-analysis-workspace && psql postgresql://postgres:12341234@localhost:5432/research -c "
+  372    industry_avg_return,
+  380  cargo build --release -p rust_llm_stock --bin dataset_creator 2>&1 | tail -10
+  381  cd /Users/alex/stock-analysis-workspace && echo "Starting dataset_creator with next_3day_return..." && nohup ./target/release/dataset_creator > dataset_creator_v2.log 2>&1 &
+  382  echo "Monitor: tail -f dataset_creator_v2.log"
+  383  sleep 10 && tail -50 dataset_creator_v2.log
+  384  sleep 15 && tail -30 dataset_creator_v2.log | grep "✓"
+  385  timeout 30 ./target/release/dataset_creator 2>&1 | head -100
+  390  cargo run --bin dataset_creator --release 2>&1 | tail -60
+  392  cd ..
+  402  sudo /usr/bin/xattr -r -d com.apple.quarantine /Users/alex/Downloads/copilot-activator.app 
+  412  cd ~
+  420  find . name .vscode
+  421  cd ~/Downloads/
+  422  cd copilot-activator.app/Contents/
+  423  ls
+  424  cd MacOS/
+  425  ls
+  426  sudo copilot-activator 
+  427  sudo copilot-activator 
+  428  ls
+  429  sudo ./copilot-activator
+  432  exit
+  442  ls
+  452  cargo check --bin dataset_creator
+  462  rsync resear
+  472  rsync -avz /Users/alex/stock-analysis-workspace/rust_llm_stock/ alex@10.0.0.14:/home/alex/rust_llm_stock/
+  482  cd ..
+  492  cargo build --bin dataset_creator
+  502  cargo build --bin dataset_creator
+  512  clear
+  520  cargo build --bin dataset_creator
+  521  cargo build --bin dataset_creator
+  522  cargo build --bin dataset_creator
+  523  cargo build --bin dataset_creator
+  524  cargo build --bin dataset_creator
+  525  cargo build --bin dataset_creator
+  526  cargo build --bin dataset_creator
+  527  cargo build --bin dataset_creator
+  528  clear
+  529  cargo build --bin dataset_creator
+  532  cargo build --bin dataset_creator
+  542  cargo build --bin dataset_creator
+  546  cargo build --bin dataset_creator 2>&1 > compile.log
+  549  cargo build --bin dataset_creator 2>&1 >> compile.log
+  550  history | grep 2&>1

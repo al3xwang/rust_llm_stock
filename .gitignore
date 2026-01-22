@@ -1,0 +1,57 @@
+# Rust build artifacts
+/target/
+
+# Model artifacts
+artifacts/*.pt
+artifacts/*.safetensors
+artifacts/*.mpk
+artifacts/train/
+artifacts/valid/
+artifacts/experiment.log
+model.mpk
+
+# Training logs
+logs/
+*.log
+training.log
+test_output.log
+
+# TensorBoard
+runs/
+tensorboard_logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.bak
+
+# Database
+*.db
+*.sqlite
+*.dump
+*.csv
+
+# Config files with secrets
+*.secret
+龙轩.ini
+src/龙轩.ini
+*.txt
+/libtorch
+/data

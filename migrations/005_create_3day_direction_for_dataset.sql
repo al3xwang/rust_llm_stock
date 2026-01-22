@@ -1,0 +1,1 @@
+ALTER TABLE ml_training_dataset ADD COLUMN next_3day_direction SMALLINT;

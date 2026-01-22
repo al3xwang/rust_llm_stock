@@ -1,0 +1,60 @@
+use rust_llm_stock::db::MlTrainingRecord;
+use rust_llm_stock::training_torch::train_with_torch;
+use std::env;
+use std::error::Error;
+use std::fs::File;
+use tch::Device;
+
+fn load_records_from_csv(path: &str) -> Result<Vec<MlTrainingRecord>, Box<dyn Error>> {
+    let mut rdr = csv::Reader::from_path(path)?;
+    let mut records = Vec::new();
+    for result in rdr.deserialize() {
+        let record: MlTrainingRecord = result?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = env::args().collect();
+    let mut train_path = "data/train.csv".to_string();
+    let mut val_path = "data/val.csv".to_string();
+    let mut device = Device::cuda_if_available();
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--train" => {
+                if i + 1 < args.len() {
+                    train_path = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "--val" => {
+                if i + 1 < args.len() {
+                    val_path = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "--device" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].as_str() {
+                        "cpu" => device = Device::Cpu,
+                        "cuda" => device = Device::Cuda(0),
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    println!("Loading training data from {}", train_path);
+    let train_records = load_records_from_csv(&train_path)?;
+    println!("Loading validation data from {}", val_path);
+    let val_records = load_records_from_csv(&val_path)?;
+    train_with_torch(train_records, val_records, device)?;
+    Ok(())
+}
