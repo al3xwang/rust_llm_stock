@@ -80,44 +80,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     csv_cols.extend_from_slice(&feature_cols);
     csv_cols.extend_from_slice(&target_cols);
 
-    // Write CSV
-    let file = File::create("training_data.csv")?;
-    let mut writer = BufWriter::new(file);
-
-    // Write header
-    writeln!(writer, "{}", csv_cols.join(","))?;
-
-    for row in &rows {
-        let mut vals = Vec::with_capacity(csv_cols.len());
-        for &col in &csv_cols {
-            let idx = all_colnames.iter().position(|&c| c == col).unwrap();
-            let val = row.try_get_raw(idx);
-            let s = if val.is_ok() && !val.as_ref().unwrap().is_null() {
-                // Try as string, f64, i32, i16, bool
-                if let Ok(v) = row.try_get::<&str, _>(idx) {
-                    v.to_string()
-                } else if let Ok(v) = row.try_get::<f64, _>(idx) {
-                    format!("{:.6}", v)
-                } else if let Ok(v) = row.try_get::<i32, _>(idx) {
-                    v.to_string()
-                } else if let Ok(v) = row.try_get::<i16, _>(idx) {
-                    v.to_string()
-                } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-                    v.to_string()
-                } else {
-                    "".to_string()
-                }
-            } else {
-                "".to_string()
-            };
-            vals.push(s);
-        }
-        writeln!(writer, "{}", vals.join(","))?;
-    }
+    // Skipping full training_data.csv export — this file is not used for model training.
+    println!("Skipping export of training_data.csv (disabled)");
 
     println!(
-        "Exported {} rows to training_data.csv with {} columns.",
-        rows.len(),
         csv_cols.len()
     );
 
