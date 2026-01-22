@@ -689,10 +689,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Pre-fetch industry performance data once for all stocks (for full date range)
     println!("\n=== Pre-fetching Industry Performance Data ===");
-    // TODO: Implement or import prefetch_industry_performance
-    // let industry_perf_data =
-    //     std::sync::Arc::new(prefetch_industry_performance(&dbpool, &final_min_date, &final_max_date).await?);
-    let industry_perf_data = std::sync::Arc::new(std::collections::HashMap::new());
+    let industry_perf_data =
+        std::sync::Arc::new(prefetch_industry_performance(&dbpool, &final_min_date, &final_max_date).await?);
+
 
     // Prefetch index data for all required indices
     let index_codes = [
