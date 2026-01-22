@@ -12,7 +12,7 @@ export LIBTORCH="/home/alex/libtorch"
 export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"  # ensure libtorch shared libs are found at runtime
 
 # Expanded sweep ranges
-LRS=(5e-6 1e-5 3e-5 1e-4 3e-4)
+LRS=(1e-5 3e-5 1e-4 3e-4)
 BATCHES=(64 128 256 512)
 WDS=(0.0 1e-7 1e-6 1e-5)
 HUBERS=("none" 0.1 0.5)
