@@ -46,9 +46,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         // Accept "cuda" or "cuda:<index>"
                         let parts: Vec<&str> = dev_str.split(':').collect();
                         let idx = if parts.len() > 1 {
-                            parts[1].parse::<i64>().unwrap_or(0)
+                            parts[1].parse::<usize>().unwrap_or(0)
                         } else {
-                            0
+                            0usize
                         };
                         device = Device::Cuda(idx);
                     }
