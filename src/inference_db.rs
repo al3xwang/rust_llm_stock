@@ -398,5 +398,6 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
         })
         .collect();
 
-    StockItem { values }
+    let last_date = records.last().map(|r| r.trade_date.clone());
+    StockItem { values, last_trade_date: last_date.clone(), dataset_last_date: last_date }
 }

@@ -78,7 +78,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut batch_size_override: Option<usize> = None;
     let mut weight_decay_override: Option<f64> = None;
     let mut huber_delta: Option<f64> = None;
+    let mut grad_clip: Option<f64> = None;
+    let mut compute_ic: bool = true;
+    let mut topk_percentiles: Option<String> = None; // comma-separated list like "0.01,0.05"
+    let mut lr_scheduler: Option<String> = None;
+    let mut lr_min: Option<f64> = None;
+    let mut cosine_t_max: Option<usize> = None;
     let mut dropout_override: Option<f32> = None;
+    let mut max_epochs_override: Option<usize> = None;
+    let mut early_stop_override: Option<usize> = None;
 
     while i < args.len() {
         match args[i].as_str() {
@@ -112,6 +120,73 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            "--grad-clip" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        grad_clip = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--no-ic" => {
+                compute_ic = false;
+            }
+            "--topk-percentiles" => {
+                if i + 1 < args.len() {
+                    topk_percentiles = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--lr-scheduler" => {
+                if i + 1 < args.len() {
+                    lr_scheduler = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--lr-min" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        lr_min = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--cosine-t-max" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<usize>() {
+                        cosine_t_max = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--t-mult" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        t_mult = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--sample-weight-method" => {
+                if i + 1 < args.len() {
+                    sample_weight_method = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--sample-weight-decay" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        sample_weight_decay = v;
+                        i += 1;
+                    }
+                }
+            }
+            "--sample-weight-normalize" => {
+                if i + 1 < args.len() {
+                    sample_weight_normalize = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
             "--dropout" => {
                 if i + 1 < args.len() {
                     if let Ok(v) = args[i + 1].parse::<f32>() {
@@ -120,10 +195,34 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            "--max-epochs" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<usize>() {
+                        max_epochs_override = Some(v);
+                        i += 1;
+                    }
+                }
+            }
+            "--early-stop" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<usize>() {
+                        early_stop_override = Some(v);
+                        i += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
     }
+
+    // Parse topk_percentiles into Vec<f64>
+    let topk_vec: Vec<f64> = topk_percentiles
+        .as_deref()
+        .unwrap_or("0.01,0.05,0.10")
+        .split(',')
+        .filter_map(|s| s.parse::<f64>().ok())
+        .collect();
 
     train_with_torch(
         train_records,
@@ -134,7 +233,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         batch_size_override,
         weight_decay_override,
         huber_delta,
+        grad_clip,
+        compute_ic,
+        topk_vec,
+        lr_scheduler,
+        lr_min,
+        cosine_t_max,
+        t_mult,
+        sample_weight_method,
+        sample_weight_decay,
+        sample_weight_normalize,
         dropout_override,
+        max_epochs_override,
+        early_stop_override,
     )?;
     Ok(())
 }
