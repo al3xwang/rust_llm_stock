@@ -4,6 +4,12 @@ set -euo pipefail
 # Hyperparameter sweep: LR x batch x weight_decay
 # Usage: ./scripts/hyper_sweep.sh
 
+# Default device & environment (override with DEVICE env var)
+# Use GPU 0 by default because it's the most powerful
+DEVICE="${DEVICE:-cuda:0}"
+export PATH="$HOME/.cargo/bin:$PATH"
+export LIBTORCH="/home/alex/libtorch"
+
 # Expanded sweep ranges
 LRS=(5e-6 1e-5 3e-5 1e-4 3e-4)
 BATCHES=(64 128 256 512)
@@ -26,7 +32,7 @@ for lr in "${LRS[@]}"; do
           mkdir -p "$OUT_DIR"
           LOG=logs/lr_${lr}_bs_${batch}_wd_${wd}_huber_${h}_dropout_${d}.log
 
-          CMD=(cargo run --release --features pytorch --bin train -- --train data/train.csv --val data/val.csv --device cuda --lr "${lr}" --batch "${batch}" --wd "${wd}" --out "$OUT_DIR")
+          CMD=(cargo run --release --features pytorch --bin train -- --train data/train.csv --val data/val.csv --device "${DEVICE}" --lr "${lr}" --batch "${batch}" --wd "${wd}" --out "$OUT_DIR")
           if [[ "${h}" != "none" ]]; then
             CMD+=(--huber-delta "${h}")
           fi
