@@ -13,6 +13,10 @@ struct Cli {
     /// Minimum number of years of history required per stock to include in export (default: 0 => include all)
     #[clap(long, default_value_t = 0usize)]
     min_years: usize,
+
+    /// Minimum total amount traded in the last ~5 days (CN¥). Stocks with less are excluded (default: 0 -> disabled)
+    #[clap(long, default_value_t = 0i64)]
+    min_5day_amount: i64,
 }
 
 #[tokio::main]
@@ -30,8 +34,65 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Query: select stocks with data covering the most recent 5 years (we will export latest 5 years per stock)
     // Selection refinement: compute average traded amount over the last 3 months and select the top 30% by liquidity.
     // Always include stocks whose code starts with the desired prefixes regardless of liquidity (to ensure coverage).
-    let rows = sqlx::query(
-        r#"
+    // Build the SQL selection; if a minimum 5-day amount threshold is configured, apply it in the selection
+    let min_5day_amount = cli.min_5day_amount;
+    let rows = if min_5day_amount > 0 {
+        sqlx::query(&format!(
+            r#"
+                WITH eligible AS (
+                    -- Stocks with sufficient listing history and presence in ml_training_dataset
+                    SELECT s.ts_code
+                    FROM stock_basic s
+                    WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      AND EXISTS (
+                        SELECT 1 FROM ml_training_dataset d
+                        WHERE d.ts_code = s.ts_code
+                          AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      )
+                ),
+                recent_liq AS (
+                    -- Explicitly compute avg(amount) over the last 3 months per stock and expose count of days
+                    SELECT a.ts_code,
+                           AVG(a.amount)::float8 AS avg_amount_3m,
+                           COUNT(*) AS n_days_3m
+                    FROM adjusted_stock_daily a
+                    WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '3 months'), 'YYYYMMDD')
+                    GROUP BY a.ts_code
+                ),
+                last_5d AS (
+                    -- Sum traded amount over the last ~5 trading days (approx using 7 calendar days window)
+                    SELECT a.ts_code,
+                           COALESCE(SUM(a.amount), 0.0)::float8 AS amount_5d
+                    FROM adjusted_stock_daily a
+                    WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 days'), 'YYYYMMDD')
+                    GROUP BY a.ts_code
+                ),
+                liq_rank AS (
+                    SELECT r.ts_code, COALESCE(r.avg_amount_3m, 0.0) AS avg_amount_3m,
+                           NTILE(100) OVER (ORDER BY COALESCE(r.avg_amount_3m, 0.0) DESC) AS pct_rank
+                    FROM recent_liq r
+                    JOIN eligible e ON e.ts_code = r.ts_code
+                ),
+                selected_stocks AS (
+                    -- Top 30 percentile by 3-month traded amount AND meeting last-5d amount threshold
+                    SELECT ts_code FROM liq_rank r JOIN last_5d l ON l.ts_code = r.ts_code WHERE pct_rank <= 30 AND l.amount_5d >= {min_amt}
+                    UNION
+                    -- Always include prefix stocks regardless of liquidity threshold
+                    SELECT ts_code FROM eligible WHERE ts_code LIKE '60%' OR ts_code LIKE '00%' OR ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
+                )
+                SELECT d.*
+                FROM ml_training_dataset d
+                JOIN selected_stocks s ON d.ts_code = s.ts_code
+                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                ORDER BY d.ts_code, d.trade_date
+        "#,
+            min_amt = min_5day_amount
+        ))
+        .fetch_all(&pool)
+        .await?
+    } else {
+        sqlx::query(
+            r#"
                 WITH eligible AS (
                     -- Stocks with sufficient listing history and presence in ml_training_dataset
                     SELECT s.ts_code
@@ -70,9 +131,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                 ORDER BY d.ts_code, d.trade_date
         "#,
-    )
-    .fetch_all(&pool)
-    .await?;
+        )
+        .fetch_all(&pool)
+        .await?
+    };
 
     if rows.is_empty() {
         println!("No data found in ml_training_dataset.");

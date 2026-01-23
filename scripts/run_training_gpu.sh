@@ -85,7 +85,7 @@ run_steps() {
   echo "⚙️  Exported TIME_DECAY=${TIME_DECAY}"
 
   # Training CLI (assumes training entrypoint uses these flags - adjust if different)
-  TRAIN_CMD=("cargo" "run" "--release" "--bin" "train" "--")
+  TRAIN_CMD=("cargo" "run" "--release" "features=pytorch" "--bin" "train" "--")
   TRAIN_CMD+=("--gpus" "${GPUS}")
   TRAIN_CMD+=("--loss" "${LOSS}")
   TRAIN_CMD+=("--time-decay" "${TIME_DECAY}")
