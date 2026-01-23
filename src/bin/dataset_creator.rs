@@ -582,6 +582,10 @@ struct Cli {
     /// Stock code to run leak-check on (optional). If not provided, first stock is used.
     #[arg(long)]
     leak_stock: Option<String>,
+
+    /// Number of years of history to include per stock (default: 5)
+    #[arg(long, default_value_t = 5)]
+    history_years: usize,
 }
 
 #[tokio::main]
@@ -718,6 +722,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             "Full dataset creation: {} to {} (constrained to global indices availability)",
             final_min_date, final_max_date
         );
+    }
+
+    // Enforce history window per stock based on CLI `history_years` (default 5 years)
+    // This moves the start date forward so we only create features within the recent window.
+    let history_years = cli.history_years;
+    if history_years > 0 {
+        if let Ok(max_dt) = chrono::NaiveDate::parse_from_str(&final_max_date, "%Y%m%d") {
+            let hist_days = (365 * history_years) as i64;
+            let desired_start = (max_dt - chrono::Duration::days(hist_days)).format("%Y%m%d").to_string();
+            if desired_start.as_str() > final_min_date.as_str() {
+                println!("⚠️  Limiting history to last {} years: {} -> {}", history_years, desired_start, final_max_date);
+                final_min_date = desired_start;
+            }
+        }
     }
 
     // Allow CLI overrides for testing: if --start-date or --end-date provided, force the range
