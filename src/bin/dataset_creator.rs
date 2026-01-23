@@ -570,6 +570,10 @@ struct Cli {
     /// Dry run: don't insert into DB (for testing)
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+
+    /// Verbose: print debug diagnostic messages (disabled by default)
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
 }
 
 #[tokio::main]
@@ -751,6 +755,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 &final_min_date,
                 &final_max_date,
                 &index_data,
+                cli.verbose,
             )
             .await;
             let calc_elapsed = calc_start.elapsed().as_millis();
@@ -830,6 +835,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let skipped = skipped.clone();
                 let total_records_atomic = total_records_atomic.clone();
                 let dry_run = cli.dry_run;
+                let verbose = cli.verbose;
 
                 async move {
                     let calc_start = std::time::Instant::now();
@@ -843,6 +849,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         &final_min_date,
                         &final_max_date,
                         &index_data,
+                        verbose,
                     )
                     .await;
                     let calc_elapsed = calc_start.elapsed().as_millis();
@@ -1408,7 +1415,7 @@ async fn prefetch_industry_performance(
     pool: &Pool<Postgres>,
     min_date: &str,
     max_date: &str,
-) -> std::collections::HashMap<(String, String), (f64, f64)> {
+) -> std::collections::HashMap<String, Vec<(String, (f64, f64))>> {
     // Compute per-industry daily average return then compute 5-day rolling average per industry
     let rows = sqlx::query!(
         r#"
@@ -1431,15 +1438,23 @@ async fn prefetch_industry_performance(
     .await
     .unwrap_or_default();
 
-    let mut map = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<String, Vec<(String, (f64, f64))>> = std::collections::HashMap::new();
     for r in rows {
-        map.insert(
-            (r.industry.clone().unwrap_or_else(|| "UNKNOWN".to_string()), r.trade_date.clone()),
-            (r.avg_return.unwrap_or(0.0), r.avg_5d.unwrap_or(0.0)),
-        );
+        let ind = r.industry.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        let trade_date = r.trade_date.clone();
+        let vals = (r.avg_return.unwrap_or(0.0), r.avg_5d.unwrap_or(0.0));
+        map.entry(ind).or_insert_with(Vec::new).push((trade_date, vals));
     }
+
+    // Ensure each industry's vector is sorted by trade_date ascending for binary search
+    for (_ind, vec) in map.iter_mut() {
+        vec.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    // --- DEBUG: Print total keys loaded ---
+    println!("[DEBUG] Total industries loaded: {}", map.len());
     map
-}
+} 
 
 // --- Add these stubs near the top of your file ---
 
@@ -1721,10 +1736,11 @@ async fn calculate_features_for_stock_sync(
     list_date: Option<&str>,
     industry: Option<&str>,
     act_ent_type: Option<&str>,
-    industry_perf_data: &std::sync::Arc<std::collections::HashMap<(String, String), (f64, f64)>>,
+    industry_perf_data: &std::sync::Arc<std::collections::HashMap<String, Vec<(String, (f64, f64))>>>,
     min_date: &str,
     max_date: &str,
     index_data: &HashMap<(String, String), IndexDaily>,
+    verbose: bool,
 ) -> Vec<FeatureRow> {
     let _stock_start = std::time::Instant::now();
 
@@ -2235,17 +2251,45 @@ async fn calculate_features_for_stock_sync(
         };
 
         // Helper: fetch industry performance for an industry and a target date.
-        // Returns the most recent industry_perf_data entry with date < target_date (strictly prior),
-        // to ensure we never use same-day industry averages (avoids look-ahead and handles suspensions).
-        let get_industry_for_date = |ind: &str, target_date: &str| {
-            // Find the most recent industry entry with date strictly before target_date
-            let mut candidates: Vec<_> = industry_perf_data
-                .iter()
-                .filter(|((i, dt), _)| i == ind && dt.as_str() < target_date)
-                .collect();
-            // Sort by date descending and take the first (most recent prior date)
-            candidates.sort_by(|((_, da), _), ((_, db), _)| db.cmp(da));
-            candidates.first().map(|(_, v)| (*v).clone())
+        // Uses per-industry sorted vectors and binary search for O(log n) lookups.
+        let get_industry_for_date = |ind: &str, target_date: &str| -> Option<(f64, f64)> {
+            if let Some(vec) = industry_perf_data.get(ind) {
+                // Binary search for position of target_date; we need the most recent date < target_date
+                match vec.binary_search_by(|(d, _)| d.as_str().cmp(target_date)) {
+                    Ok(idx) => {
+                        if idx == 0 {
+                            None
+                        } else {
+                            let vals = &vec[idx - 1].1;
+                            Some(*vals)
+                        }
+                    }
+                    Err(idx) => {
+                        if idx == 0 {
+                            None
+                        } else {
+                            let vals = &vec[idx - 1].1;
+                            Some(*vals)
+                        }
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        // Determine previous trading date (if available) and use it for index lookups
+        let prev_date_opt = if i > 0 {
+            Some(daily_data[i - 1].trade_date.clone())
+        } else {
+            None
+        };
+
+        // CSI300
+        let csi300 = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("000300.SH", pd)
+        } else {
+            None
         };
 
         // Determine previous trading date (if available) and use it for index lookups
@@ -2444,13 +2488,13 @@ async fn calculate_features_for_stock_sync(
             let res = get_industry_for_date(ind, &day.trade_date);
             if let Some((avg, mom5)) = res {
                 // Debug for suspicious date range to ensure strict prior-date selection
-                if day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
+                if verbose && day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
                     println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, chosen_avg={}, chosen_mom5={}", ts_code, day.trade_date, ind, avg, mom5);
                 }
                 (Some(avg), Some(mom5))
             } else {
                 // Debug missing prior entry
-                if day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
+                if verbose && day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
                     println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, NO_PRIOR_FOUND", ts_code, day.trade_date, ind);
                 }
                 (None, None)
