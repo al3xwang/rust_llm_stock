@@ -16,18 +16,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&db_url)
         .await?;
 
-    // Query: select stocks listed at least 7 years ago, with 2 years warmup and 5 years modeling data, filter out pe/pe_ttm/dv_ttm nulls
+    // Query: select stocks listed at least 5 years ago, with 2 years warmup and 5 years modeling data
     // Use a CTE to select 1000 random eligible stocks
     let rows = sqlx::query(
         r#"
                 WITH eligible_stocks AS (
                         SELECT s.ts_code
                         FROM stock_basic s
-                        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                             AND EXISTS (
                                     SELECT 1 FROM ml_training_dataset d
                                     WHERE d.ts_code = s.ts_code
-                                        AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                                        AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                             )
                         ORDER BY RANDOM()
                         LIMIT 1000
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SELECT d.*
                 FROM ml_training_dataset d
                 JOIN eligible_stocks e ON d.ts_code = e.ts_code
-                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                 ORDER BY d.ts_code, d.trade_date
         "#,
     )
