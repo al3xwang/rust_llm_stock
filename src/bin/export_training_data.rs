@@ -20,25 +20,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Use a CTE to select 1000 random eligible stocks
     let rows = sqlx::query(
         r#"
-        WITH eligible_stocks AS (
-            SELECT s.ts_code
-            FROM stock_basic s
-            WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
-              AND EXISTS (
-                  SELECT 1 FROM ml_training_dataset d
-                  WHERE d.ts_code = s.ts_code
-                    AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
-                    AND d.pe IS NOT NULL AND d.pe_ttm IS NOT NULL AND d.dv_ttm IS NOT NULL
-              )
-            ORDER BY RANDOM()
-            LIMIT 1000
-        )
-        SELECT d.*
-        FROM ml_training_dataset d
-        JOIN eligible_stocks e ON d.ts_code = e.ts_code
-        WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
-          AND d.pe IS NOT NULL AND d.pe_ttm IS NOT NULL AND d.dv_ttm IS NOT NULL
-        ORDER BY d.ts_code, d.trade_date
+                WITH eligible_stocks AS (
+                        SELECT s.ts_code
+                        FROM stock_basic s
+                        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                            AND EXISTS (
+                                    SELECT 1 FROM ml_training_dataset d
+                                    WHERE d.ts_code = s.ts_code
+                                        AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                            )
+                        ORDER BY RANDOM()
+                        LIMIT 1000
+                )
+                SELECT d.*
+                FROM ml_training_dataset d
+                JOIN eligible_stocks e ON d.ts_code = e.ts_code
+                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 years'), 'YYYYMMDD')
+                ORDER BY d.ts_code, d.trade_date
         "#,
     )
     .fetch_all(&pool)
