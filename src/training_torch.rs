@@ -35,7 +35,18 @@ pub fn train_with_torch(
     println!("Initializing PyTorch model on {:?}...", device);
 
     // Config - Optimized for 80%+ GPU utilization
-    let seq_len = 60; // ~3 months of context, aligns with longer-horizon features
+    // Desired sequence length (can be reduced automatically if dataset shorter)
+    let desired_seq_len = 60; // ~3 months of context, aligns with longer-horizon features
+    // Determine max possible seq_len from training records to avoid empty datasets
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for r in &train_records {
+        *counts.entry(r.ts_code.clone()).or_insert(0) += 1;
+    }
+    let min_count = counts.values().min().cloned().unwrap_or(0);
+    if min_count <= 1 {
+        anyhow::bail!("Not enough records per-stock to build sequences (min_count={}).", min_count);
+    }
+    let seq_len = std::cmp::min(desired_seq_len, min_count - 1);
     // Defaults (can be overridden via CLI)
     let default_batch_size = 256; // Large batches to maximize GPU utilization
     let batch_size = batch_override.unwrap_or(default_batch_size);
@@ -107,7 +118,10 @@ pub fn train_with_torch(
     // Training loop - controlled by patience-based early stopping
     let warmup_epochs = 5;
     // Cosine restart tracking
-    let mut cycle_t_max = cosine_t_max.map(|v| v as f64).unwrap_or((max_epochs - warmup_epochs) as f64);
+    // Ensure cycle length is at least 1 to avoid underflow when max_epochs <= warmup_epochs
+    let mut cycle_t_max = cosine_t_max
+        .map(|v| v as f64)
+        .unwrap_or((max_epochs.saturating_sub(warmup_epochs) as f64).max(1.0));
     let mut t_in_cycle = 0.0f64;
     let t_mult_val = t_mult.unwrap_or(2.0);
 
@@ -278,7 +292,7 @@ fn train_epoch_stream(
     let mut dev_weights_buf: Option<Tensor> = None;
 
     for batch in StreamedBatches::new(datasets, batch_size, Device::Cpu, seq_len, sample_weight_method, sample_weight_decay, sample_weight_normalize) {
-        if let Ok((inputs_cpu, targets_cpu, weights_cpu)) = batch {
+        if let Ok((inputs_cpu, targets_cpu, weights_cpu, next_day_cpu)) = batch {
             // Allocate or reuse device buffers with exact shapes
             let shape_inputs = inputs_cpu.size();
             let shape_targets = targets_cpu.size();
@@ -520,7 +534,7 @@ fn validate_epoch_stream(
     let mut targets_all: Vec<f64> = Vec::new();
 
     for batch in StreamedBatches::new(datasets, batch_size, Device::Cpu, seq_len, sample_weight_method, sample_weight_decay, sample_weight_normalize) {
-        if let Ok((inputs_cpu, targets_cpu, weights_cpu)) = batch {
+        if let Ok((inputs_cpu, targets_cpu, weights_cpu, next_day_cpu)) = batch {
             // Allocate or reuse device buffers with exact shapes
             let shape_inputs = inputs_cpu.size();
             let shape_targets = targets_cpu.size();
@@ -589,7 +603,7 @@ fn validate_epoch_stream(
             // Collect for IC/TopK computation (move to CPU and flatten)
             if compute_ic {
                 let pred_cpu = pred_pct_1day.to_device(Device::Cpu);
-                let target_cpu = target_pct.to_device(Device::Cpu);
+                let next_cpu = next_day_cpu.to_device(Device::Cpu);
                 let s0 = pred_cpu.size();
                 if s0.len() == 2 {
                     let b = s0[0] as i64;
@@ -597,7 +611,11 @@ fn validate_epoch_stream(
                     for ii in 0..b {
                         for jj in 0..s {
                             let pv = pred_cpu.double_value(&[ii, jj]);
-                            let tv = target_cpu.double_value(&[ii, jj]);
+                            let tv = next_cpu.double_value(&[ii, jj]);
+                            // skip NaN targets (missing next_day_return)
+                            if tv.is_nan() {
+                                continue;
+                            }
                             preds_all.push(pv);
                             targets_all.push(tv);
                         }
@@ -655,18 +673,18 @@ fn validate_epoch_stream(
     Ok(avg_loss)
 }
 
-fn prepare_batch(
+    fn prepare_batch(
     batch: &[crate::dataset::StockItem],
     device: Device,
     seq_len: usize,
     sample_weight_method: &str,
     sample_weight_decay: f64,
     sample_weight_normalize: &str,
-) -> Result<(Tensor, Tensor, Tensor)> {
+) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
     let batch_size = batch.len();
 
     // Build per-item normalized inputs/targets in parallel to reduce CPU time.
-    let per_item: Vec<(Vec<f32>, Vec<f32>, Option<String>, Option<String>)> = batch
+    let per_item: Vec<(Vec<f32>, Vec<f32>, Option<String>, Option<String>, Vec<Option<f32>>)> = batch
         .par_iter()
         .filter_map(|item| {
             if item.values.len() < seq_len + 1 {
@@ -697,20 +715,27 @@ fn prepare_batch(
                 local_targets.extend_from_slice(&normalized);
             }
 
-            Some((local_inputs, local_targets, item.last_trade_date.clone(), item.dataset_last_date.clone()))
+            Some((local_inputs, local_targets, item.last_trade_date.clone(), item.dataset_last_date.clone(), item.next_day_returns.clone()))
         })
         .collect();
 
     // Flatten into contiguous buffers in original order.
     let mut input_data = Vec::with_capacity(batch_size * seq_len * FEATURE_SIZE);
     let mut target_data = Vec::with_capacity(batch_size * seq_len * FEATURE_SIZE);
+    let mut next_day_data: Vec<f64> = Vec::with_capacity(batch_size * seq_len);
     let mut last_trade_dates: Vec<Option<String>> = Vec::with_capacity(batch_size);
     let mut dataset_last_dates: Vec<Option<String>> = Vec::with_capacity(batch_size);
-    for (inputs_one, targets_one, last_dt, dataset_dt) in per_item.into_iter() {
+    for (inputs_one, targets_one, last_dt, dataset_dt, nd_returns) in per_item.into_iter() {
         input_data.extend_from_slice(&inputs_one);
         target_data.extend_from_slice(&targets_one);
         last_trade_dates.push(last_dt);
         dataset_last_dates.push(dataset_dt);
+        // nd_returns contains next_day_return per original values entry.
+        // Targets correspond to nd_returns[1..=seq_len]
+        for t in 1..=seq_len {
+            let v = nd_returns.get(t).and_then(|o| *o).map(|x| x as f64).unwrap_or(f64::NAN);
+            next_day_data.push(v);
+        }
     }
 
     // If no valid items were prepared, skip this batch gracefully.
@@ -769,7 +794,9 @@ fn prepare_batch(
         .to_device(device);
     let weights_t = Tensor::from_slice(&weights).reshape(&[actual_batch]).to_device(device);
 
-    Ok((inputs, targets, weights_t))
+    // next_day_data length = actual_batch * seq_len
+    let next_day_tensor = Tensor::from_slice(&next_day_data).reshape(&[actual_batch, seq_len as i64]).to_device(device);
+    Ok((inputs, targets, weights_t, next_day_tensor))
 }
 
 struct StreamedBatches<'a> {
@@ -812,7 +839,7 @@ impl<'a> StreamedBatches<'a> {
 }
 
 impl<'a> Iterator for StreamedBatches<'a> {
-    type Item = Result<(Tensor, Tensor, Tensor)>; // inputs, targets, weights
+    type Item = Result<(Tensor, Tensor, Tensor, Tensor)>; // inputs, targets, weights, next_day_returns
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -854,7 +881,7 @@ fn prefetch_batches(
     device: Device,
     seq_len: usize,
     prefetch_depth: usize, // how many batches to prepare ahead
-) -> Vec<Result<(Tensor, Tensor, Tensor)>> {
+)-> Vec<(Tensor, Tensor, Tensor, Tensor)> {
     // Collect all raw batches first (use default sample-weighting params)
     let raw_batches: Vec<_> = StreamedBatches::new(datasets, batch_size, Device::Cpu, seq_len, "none", 0.0, "mean")
         .take(total_batches)
@@ -864,12 +891,13 @@ fn prefetch_batches(
     // Prepare in parallel using Rayon, then move to GPU
     raw_batches
         .into_par_iter()
-        .map(|(inputs_cpu, targets_cpu, weights_cpu)| {
+        .map(|(inputs_cpu, targets_cpu, weights_cpu, next_day_cpu)| {
             // Move to device: creates new tensors on target device
             let inputs_gpu = inputs_cpu.to(device);
             let targets_gpu = targets_cpu.to(device);
             let weights_gpu = weights_cpu.to(device);
-            Ok((inputs_gpu, targets_gpu, weights_gpu))
+            let next_gpu = next_day_cpu.to(device);
+            (inputs_gpu, targets_gpu, weights_gpu, next_gpu)
         })
         .collect()
 }
