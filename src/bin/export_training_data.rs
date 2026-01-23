@@ -30,7 +30,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                             )
                         ORDER BY RANDOM()
-                        LIMIT 1000
                 )
                 SELECT d.*
                 FROM ml_training_dataset d
@@ -130,8 +129,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut sorted = stock_rows;
         sorted.sort_by_key(|row| row.try_get::<String, _>("trade_date").unwrap_or_default());
         let total = sorted.len();
-        // Lower minimum: require at least 2 years warmup + 1 year modeling (approx 660 days)
-        let warmup = (2.0_f32 * 240.0_f32).round() as usize; // 2 years warmup (approx)
+        // Lower minimum: require at least 1 year warmup + 1 year modeling (approx 460 days)
+        let warmup = (1.0_f32 * 240.0_f32).round() as usize; // 1 year warmup (approx)
         let min_model = (1.0_f32 * 220.0_f32).round() as usize; // 1 year modeling (approx)
         if total < warmup + min_model {
             continue;
