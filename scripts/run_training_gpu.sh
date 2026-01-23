@@ -49,7 +49,7 @@ mkdir -p "${LOG_DIR}"
 
 run_steps() {
   echo "==> Running dataset creator (history=${HISTORY_YEARS} years)"
-  cargo run --release --bin dataset_creator -- --history-years ${HISTORY_YEARS}
+  cargo run --release --bin dataset_creator --  --start-date 20190101 --history-years ${HISTORY_YEARS}
 
   echo "==> Exporting training data (latest 5 years). Output will be placed in ./data"
   # Ensure data dir exists
