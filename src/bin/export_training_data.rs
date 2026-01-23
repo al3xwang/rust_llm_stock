@@ -16,24 +16,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&db_url)
         .await?;
 
-    // Query: select stocks listed at least 5 years ago, with 2 years warmup and 5 years modeling data
-    // Use a CTE to select 1000 random eligible stocks
+    // Query: select stocks listed at least 5 years ago, with 1 year warmup and 5 years modeling data
+    // Selection refinement: compute average traded amount over the last 3 months and select the top 30% by liquidity.
+    // Always include stocks whose code starts with the desired prefixes regardless of liquidity (to ensure coverage).
     let rows = sqlx::query(
         r#"
-                WITH eligible_stocks AS (
-                        SELECT s.ts_code
-                        FROM stock_basic s
-                        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
-                            AND EXISTS (
-                                    SELECT 1 FROM ml_training_dataset d
-                                    WHERE d.ts_code = s.ts_code
-                                        AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
-                            )
-                        ORDER BY RANDOM()
+                WITH eligible AS (
+                    -- Stocks with sufficient listing history and presence in ml_training_dataset
+                    SELECT s.ts_code
+                    FROM stock_basic s
+                    WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      AND EXISTS (
+                        SELECT 1 FROM ml_training_dataset d
+                        WHERE d.ts_code = s.ts_code
+                          AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      )
+                ),
+                recent_liq AS (
+                    SELECT a.ts_code,
+                           AVG(a.amount) FILTER (WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '3 months'), 'YYYYMMDD')) AS avg_amount_3m
+                    FROM adjusted_stock_daily a
+                    GROUP BY a.ts_code
+                ),
+                liq_rank AS (
+                    SELECT r.ts_code, COALESCE(r.avg_amount_3m, 0.0) AS avg_amount_3m,
+                           NTILE(100) OVER (ORDER BY COALESCE(r.avg_amount_3m, 0.0) DESC) AS pct_rank
+                    FROM recent_liq r
+                    JOIN eligible e ON e.ts_code = r.ts_code
+                ),
+                selected_stocks AS (
+                    -- Top 30 percentile by 3-month traded amount OR explicit prefix inclusion
+                    SELECT ts_code FROM liq_rank WHERE pct_rank <= 30
+                    UNION
+                    SELECT ts_code FROM eligible WHERE ts_code LIKE '60%' OR ts_code LIKE '00%' OR ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
                 )
                 SELECT d.*
                 FROM ml_training_dataset d
-                JOIN eligible_stocks e ON d.ts_code = e.ts_code
+                JOIN selected_stocks s ON d.ts_code = s.ts_code
                 WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                 ORDER BY d.ts_code, d.trade_date
         "#,
@@ -44,6 +63,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if rows.is_empty() {
         println!("No data found in ml_training_dataset.");
         return Ok(());
+    }
+
+    // Compute selected stock set and print basic coverage statistics
+    use std::collections::HashSet;
+    let mut sel_set: HashSet<String> = HashSet::new();
+    for row in &rows {
+        let ts_code: String = row.try_get("ts_code").unwrap_or_default();
+        sel_set.insert(ts_code);
+    }
+    println!("Selected stock codes: {}", sel_set.len());
+    // Prefix coverage (60,00,30,68,9)
+    let prefixes = ["60", "00", "30", "68", "9"];
+    for p in &prefixes {
+        let cnt = sel_set.iter().filter(|s| s.starts_with(p)).count();
+        println!("  Prefix {}: {} stocks", p, cnt);
     }
 
     // Get column names (normalize by trimming whitespace)
