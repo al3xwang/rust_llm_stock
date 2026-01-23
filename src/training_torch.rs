@@ -134,6 +134,11 @@ pub fn train_with_torch(
             "\nEpoch {} (early stopping patience: {}/{})",
             epoch, epochs_without_improvement, early_stop_patience
         );
+        // Log which loss is active this epoch (Huber with delta or plain MSE)
+        println!("  ⚖️  Loss mode: {}", match huber_delta {
+            Some(d) => format!("Huber (delta={})", d),
+            None => "MSE".to_string(),
+        });
 
         // Learning rate warmup
         if epoch <= warmup_epochs {
