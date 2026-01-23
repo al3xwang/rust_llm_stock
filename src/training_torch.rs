@@ -1035,7 +1035,7 @@ pub(crate) fn weighted_mse_loss(pred: &Tensor, target: &Tensor, weights: &Tensor
     // per-sample mean over remaining dims
     let sz = sq.size();
     let batch = sz[0];
-    let n_elems_per = (sz[1] * sz[2]) as f64;
+    let _n_elems_per = (sz[1] * sz[2]) as f64; // previously unused; prefixed to avoid warning
     let per_sample = sq.reshape(&[batch, -1]).mean_dim(1, false, tch::Kind::Float);
     // weights shape [batch]
     let weighted = per_sample * weights;
