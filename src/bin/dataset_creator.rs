@@ -583,9 +583,17 @@ struct Cli {
     #[arg(long)]
     leak_stock: Option<String>,
 
-    /// Number of years of history to include per stock (default: 5)
-    #[arg(long, default_value_t = 5)]
+    /// Number of years of history to include per stock (default: 7). Use at least 7 to cover a 6.5-year train/val/test split.
+    #[arg(long, default_value_t = 7)]
     history_years: usize,
+
+    /// Apply monthly cross-sectional winsorization to `next_day_return` after dataset creation
+    #[arg(long, default_value_t = false)]
+    winsorize_monthly: bool,
+
+    /// Winsorization tail percentile (e.g., 0.025 for 2.5%)
+    #[arg(long, default_value_t = 0.025)]
+    winsorize_pct: f64,
 }
 
 #[tokio::main]
@@ -691,7 +699,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let max_date = date_range.1;
 
     // Fix: If incremental start date is after max_date, do a full rebuild instead
-    let (final_min_date, final_max_date) = if min_date > max_date {
+    let (mut final_min_date, final_max_date) = if min_date > max_date {
         println!(
             "⚠️  Incremental update would create invalid range ({} to {}), doing full rebuild instead",
             min_date, max_date
@@ -736,6 +744,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 final_min_date = desired_start;
             }
         }
+    }
+
+    // Warn if configured history is less than recommended for export (6.5 years required).
+    if history_years < 7 {
+        println!("⚠️  Configured --history-years={} is less than 7 years. To ensure full coverage for a 5y train + 1y val + 0.5y test split, run with --history-years 7 or higher.", history_years);
     }
 
     // Allow CLI overrides for testing: if --start-date or --end-date provided, force the range
@@ -832,6 +845,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 &final_min_date,
                 &final_max_date,
                 &index_data,
+                history_years,
                 cli.verbose,
                 cli.leak_check,
                 &effective_current_date,
@@ -930,6 +944,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         &final_min_date,
                         &final_max_date,
                         &index_data,
+                        history_years,
                         verbose,
                         cli.leak_check,
                         &effective_current_date_value,
@@ -1006,6 +1021,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             "⚠️  Skipped {} stocks due to insufficient historical data (< 60 days)",
             final_skipped
         );
+    }
+
+    // Optionally apply monthly winsorization to next_day_return
+    if cli.winsorize_monthly {
+        println!("⚙️  Applying monthly cross-sectional winsorization (pct={})...", cli.winsorize_pct);
+        let updated = apply_monthly_winsorization(&dbpool, cli.winsorize_pct).await?;
+        println!("✅ Monthly winsorization applied. Rows updated: {}", updated);
     }
 
     Ok(())
@@ -1822,6 +1844,7 @@ async fn calculate_features_for_stock_sync(
     min_date: &str,
     max_date: &str,
     index_data: &HashMap<(String, String), IndexDaily>,
+    history_years: usize,
     verbose: bool,
     leak_check: bool,
     current_date: &str,
@@ -1856,18 +1879,18 @@ async fn calculate_features_for_stock_sync(
         return vec![];
     }
 
-    // CRITICAL FIX: Skip stocks with insufficient historical data
-    // We need at least 60 days of data before attempting to calculate technical indicators
-    // that require 20+ day lookback periods (Bollinger Bands, etc.)
-    let min_history_required = 60;
+    // If the stock has less than the desired history, warn but continue — we will still
+    // generate features for available dates and let export-time filtering handle shorter histories.
+    // Require `history_years` years worth of trading days (approx 240 trading days per year) for the warning threshold
+    let min_history_required = std::cmp::max(60, (history_years * 240) as usize);
     if daily_data.len() < min_history_required {
         eprintln!(
-            "⚠️  Stock {} has only {} days of history (need {}). Skipping feature calculation.",
+            "⚠️  Stock {} has only {} days of history (need {} for {} years). Continuing and generating available features (will be filtered at export).",
             ts_code,
             daily_data.len(),
-            min_history_required
+            min_history_required,
+            history_years
         );
-        return vec![];
     }
 
     // --- Prefetch daily_basic and moneyflow data for this stock (with historical buffer) ---
@@ -3009,6 +3032,36 @@ async fn calculate_features_for_stock_sync(
         std::process::exit(2);
     }
     filtered
+}
+
+/// Apply monthly cross-sectional winsorization to `next_day_return`.
+/// This computes, for each calendar month (YYYYMM), the lower and upper percentile
+/// boundaries using `percentile_cont` and clamps `next_day_return` into that range.
+async fn apply_monthly_winsorization(pool: &Pool<Postgres>, pct: f64) -> Result<u64, Box<dyn Error + Send + Sync>> {
+    let lower = pct;
+    let upper = 1.0 - pct;
+    println!("⚙️  Applying monthly winsorization: pct={} (lower={} upper={})", pct, lower, upper);
+
+    let sql = r#"
+        WITH monthly_bounds AS (
+            SELECT TO_CHAR(TO_DATE(trade_date,'YYYYMMDD'),'YYYYMM') AS trade_ym,
+                   percentile_cont($1) WITHIN GROUP (ORDER BY next_day_return) AS low,
+                   percentile_cont($2) WITHIN GROUP (ORDER BY next_day_return) AS high
+            FROM ml_training_dataset
+            WHERE next_day_return IS NOT NULL
+            GROUP BY trade_ym
+        )
+        UPDATE ml_training_dataset m
+        SET next_day_return = LEAST(GREATEST(m.next_day_return, monthly_bounds.low), monthly_bounds.high)
+        FROM monthly_bounds
+        WHERE TO_CHAR(TO_DATE(m.trade_date,'YYYYMMDD'),'YYYYMM') = monthly_bounds.trade_ym
+          AND m.next_day_return IS NOT NULL
+    "#;
+
+    let result = sqlx::query(sql).bind(lower).bind(upper).execute(pool).await?;
+    let updated = result.rows_affected();
+    println!("✅ Monthly winsorization complete. Rows updated: {}", updated);
+    Ok(updated)
 }
 
 /// Helper function to create the machine learning training dataset table

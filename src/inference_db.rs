@@ -399,5 +399,7 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
         .collect();
 
     let last_date = records.last().map(|r| r.trade_date.clone());
-    StockItem { values, last_trade_date: last_date.clone(), dataset_last_date: last_date }
+    // build next_day_returns aligned with values
+    let nd_returns: Vec<Option<f32>> = records.iter().map(|r| r.next_day_return.map(|v| v as f32)).collect();
+    StockItem { values, last_trade_date: last_date.clone(), dataset_last_date: last_date, next_day_returns: nd_returns }
 }
