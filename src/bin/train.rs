@@ -77,7 +77,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut out_dir: Option<String> = None;
     let mut batch_size_override: Option<usize> = None;
     let mut weight_decay_override: Option<f64> = None;
-    let mut huber_delta: Option<f64> = None;
+    // Default to Huber loss with delta=1.0 (can be overridden with --huber-delta)
+    let mut huber_delta: Option<f64> = Some(1.0);
     let mut grad_clip: Option<f64> = None;
     let mut compute_ic: bool = true;
     let mut topk_percentiles: Option<String> = None; // comma-separated list like "0.01,0.05"
