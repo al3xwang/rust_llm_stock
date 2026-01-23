@@ -2444,13 +2444,13 @@ async fn calculate_features_for_stock_sync(
             let res = get_industry_for_date(ind, &day.trade_date);
             if let Some((avg, mom5)) = res {
                 // Debug for suspicious date range to ensure strict prior-date selection
-                if day.trade_date >= "20210110" && day.trade_date <= "20210131" {
+                if day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
                     println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, chosen_avg={}, chosen_mom5={}", ts_code, day.trade_date, ind, avg, mom5);
                 }
                 (Some(avg), Some(mom5))
             } else {
                 // Debug missing prior entry
-                if day.trade_date >= "20210110" && day.trade_date <= "20210131" {
+                if day.trade_date.as_str() >= "20210110" && day.trade_date.as_str() <= "20210131" {
                     println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, NO_PRIOR_FOUND", ts_code, day.trade_date, ind);
                 }
                 (None, None)
