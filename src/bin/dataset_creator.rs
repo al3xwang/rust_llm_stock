@@ -630,20 +630,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let processing_start = std::time::Instant::now();
 
-    // If leak_check requested, restrict to single stock and force sequential processing
+    // If leak_check requested, force sequential processing. Only restrict to a single
+    // stock if `--leak-stock` is provided; otherwise run leak-check across all stocks.
     let concurrency = if cli.leak_check { 1usize } else { cli.concurrency };
     if cli.leak_check {
-        let selected = cli
-            .leak_stock
-            .clone()
-            .or_else(|| stocks.get(0).map(|s| s.0.clone()));
-        if let Some(ts) = selected {
+        if let Some(ts) = cli.leak_stock.clone() {
             stocks.retain(|(code, _, _, _)| code == &ts);
             if stocks.is_empty() {
                 eprintln!("⚠️  leak-check: specified stock {} not found in stock list", ts);
                 std::process::exit(3);
             }
             println!("Running leak-check for {} (concurrency forced to 1)", ts);
+        } else {
+            println!("Running leak-check for all stocks (concurrency forced to 1)");
         }
     }
 
@@ -1857,6 +1856,31 @@ async fn calculate_features_for_stock_sync(
     let daily_basic_map = prefetch_daily_basic_map(pool, ts_code, &fetch_start, max_date).await;
     let moneyflow_map = prefetch_moneyflow_map(pool, ts_code, &fetch_start, max_date).await;
 
+    // Helper closures to access daily_basic and moneyflow with leak_check instrumentation
+    let get_daily_basic_for_date = |dt: &str| {
+        if leak_check {
+            if dt > current_date {
+                leak_issues.lock().unwrap().push(format!(
+                    "daily_basic selected date {} > CURRENT_DATE {} for {}",
+                    dt, current_date, ts_code
+                ));
+            }
+        }
+        daily_basic_map.get(&(ts_code.to_string(), dt.to_string()))
+    };
+
+    let get_moneyflow_for_date = |dt: &str| {
+        if leak_check {
+            if dt > current_date {
+                leak_issues.lock().unwrap().push(format!(
+                    "moneyflow selected date {} > CURRENT_DATE {} for {}",
+                    dt, current_date, ts_code
+                ));
+            }
+        }
+        moneyflow_map.get(&(ts_code.to_string(), dt.to_string()))
+    };
+
     let mut features = Vec::with_capacity(daily_data.len());
     let mut closes = Vec::new();
     let mut highs = Vec::new();
@@ -2585,7 +2609,7 @@ async fn calculate_features_for_stock_sync(
         });
 
         // --- Map daily_basic fields by (ts_code, trade_date) ---
-        let daily_basic = daily_basic_map.get(&(ts_code.to_string(), day.trade_date.clone()));
+        let daily_basic = get_daily_basic_for_date(&day.trade_date);
 
         // CMF (already computed earlier via function) - ensure we set it here
         let cmf_20 = if highs.len() >= 20 {
@@ -2762,7 +2786,7 @@ async fn calculate_features_for_stock_sync(
         // ========== END: New Features ==========
 
         // --- Moneyflow Features ---
-        let moneyflow = moneyflow_map.get(&(ts_code.to_string(), day.trade_date.clone()));
+        let moneyflow = get_moneyflow_for_date(&day.trade_date);
 
         // Raw moneyflow values
         let net_mf_vol = moneyflow.and_then(|m| m.net_mf_vol);
@@ -2786,7 +2810,7 @@ async fn calculate_features_for_stock_sync(
         let large_order_flow = if i >= 4 {
             let mf_window: Vec<f64> = (i.saturating_sub(4)..=i)
                 .filter_map(|j| {
-                    moneyflow_map.get(&(ts_code.to_string(), daily_data[j].trade_date.clone()))
+                    get_moneyflow_for_date(&daily_data[j].trade_date)
                 })
                 .filter_map(|m| m.net_mf_vol)
                 .collect();
