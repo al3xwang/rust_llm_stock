@@ -1829,7 +1829,7 @@ async fn calculate_features_for_stock_sync(
         // --- Add SMA features using ta::indicators::SimpleMovingAverage ---
         let sma_5 = if closes.len() >= 5 {
             let mut sma = Sma::new(5).unwrap();
-            for c in &closes[closes.len() - 5..] {
+            for c in &closes[(closes.len() - 5)..(closes.len() - 1)] {
                 sma.next(*c);
             }
             Some(sma.next(close))
@@ -1838,7 +1838,7 @@ async fn calculate_features_for_stock_sync(
         };
         let sma_10 = if closes.len() >= 10 {
             let mut sma = Sma::new(10).unwrap();
-            for c in &closes[closes.len() - 10..] {
+            for c in &closes[(closes.len() - 10)..(closes.len() - 1)] {
                 sma.next(*c);
             }
             Some(sma.next(close))
@@ -1847,7 +1847,7 @@ async fn calculate_features_for_stock_sync(
         };
         let sma_20 = if closes.len() >= 20 {
             let mut sma = Sma::new(20).unwrap();
-            for c in &closes[closes.len() - 20..] {
+            for c in &closes[(closes.len() - 20)..(closes.len() - 1)] {
                 sma.next(*c);
             }
             Some(sma.next(close))
@@ -1882,7 +1882,7 @@ async fn calculate_features_for_stock_sync(
         // RSI
         let rsi_14 = if closes.len() >= 14 {
             let mut rsi = Rsi::new(14).unwrap();
-            for c in &closes[closes.len() - 14..] {
+            for c in &closes[(closes.len() - 14)..(closes.len() - 1)] {
                 rsi.next(*c);
             }
             Some(rsi.next(day.close))
@@ -1893,7 +1893,7 @@ async fn calculate_features_for_stock_sync(
         // KDJ
         let (kdj_k, kdj_d, kdj_j) = if closes.len() >= 9 {
             let mut kdj = KDJIndicator::new(9).unwrap();
-            for j in (closes.len() - 9)..closes.len() {
+            for j in (closes.len() - 9)..(closes.len() - 1) {
                 let di = DataItem::builder()
                     .high(highs[j])
                     .low(lows[j])
@@ -1921,7 +1921,7 @@ async fn calculate_features_for_stock_sync(
         // Bollinger Bands
         let (bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b) = if closes.len() >= 20 {
             let mut bb = BollingerBands::new(20, 2.0).unwrap();
-            for j in (closes.len() - 20)..closes.len() {
+            for j in (closes.len() - 20)..(closes.len() - 1) {
                 bb.next(closes[j]);
             }
             let bands = bb.next(day.close);
@@ -1939,7 +1939,7 @@ async fn calculate_features_for_stock_sync(
         // ATR
         let atr = if closes.len() >= 14 {
             let mut atr = Atr::new(14).unwrap();
-            for j in (closes.len() - 14)..closes.len() {
+            for j in (closes.len() - 14)..(closes.len() - 1) {
                 let di = DataItem::builder()
                     .high(highs[j])
                     .low(lows[j])
@@ -2217,6 +2217,23 @@ async fn calculate_features_for_stock_sync(
             candidates.first().map(|(_, data)| (*data).clone())
         };
 
+        // Helper: fetch industry performance for an industry and a target date.
+        // Returns the most recent industry_perf_data entry with date < target_date (strictly prior),
+        // to ensure we never use same-day industry averages (avoids look-ahead and handles suspensions).
+        let get_industry_for_date = |ind: &str, target_date: &str| {
+            // Try exact match first (for prior-date lookups caller may pass previous date)
+            if let Some(val) = industry_perf_data.get(&(ind.to_string(), target_date.to_string())) {
+                return Some(*val);
+            }
+            // Otherwise find the most recent date strictly before target_date
+            let mut candidates: Vec<_> = industry_perf_data
+                .iter()
+                .filter(|((i, dt), _)| i == ind && dt.as_str() < target_date)
+                .collect();
+            candidates.sort_by(|(a, _), (b, _)| b.0.cmp(&a.0)); // sort by (industry,date) descending on key (date part)
+            candidates.first().map(|(_, v)| *v)
+        };
+
         // Determine previous trading date (if available) and use it for index lookups
         let prev_date_opt = if i > 0 {
             Some(daily_data[i - 1].trade_date.clone())
@@ -2407,17 +2424,12 @@ async fn calculate_features_for_stock_sync(
         };
 
         // Industry features (lookup from pre-fetched map)
-        // Use previous trading date to avoid look-ahead leakage (shift by 1)
+        // Use most-recent industry performance strictly prior to the current `trade_date` to avoid look-ahead.
         let (industry_avg_return, industry_momentum_5d) = if let Some(ind) = industry {
-            if i > 0 {
-                let prev_date = daily_data[i - 1].trade_date.clone();
-                if let Some((avg, mom5)) = industry_perf_data.get(&(ind.to_string(), prev_date)) {
-                    (Some(*avg), Some(*mom5))
-                } else {
-                    (None, None)
-                }
+            // Find latest industry perf entry with date < current trade_date (handles suspensions)
+            if let Some((avg, mom5)) = get_industry_for_date(ind, &day.trade_date) {
+                (Some(avg), Some(mom5))
             } else {
-                // No prior date available for the first row
                 (None, None)
             }
         } else {
