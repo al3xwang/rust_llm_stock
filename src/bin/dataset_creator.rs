@@ -575,6 +575,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let cli = Cli::parse();
+    eprintln!("[DEBUG] CLI args: start_date={:?}, end_date={:?}, concurrency={}, dry_run={}", cli.start_date, cli.end_date, cli.concurrency, cli.dry_run);
     let start_time = std::time::Instant::now();
     let dbpool = get_connection().await;
 
@@ -627,8 +628,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .filter(|s: &String| !s.is_empty());
     eprintln!("[DEBUG] Step 3: Got max_ml_date = {:?}", max_ml_date);
 
-    // For incremental updates, start from the day AFTER max_ml_date
-    let incremental_start: Option<String> = if let Some(ref ml_date) = max_ml_date {
+    // For incremental updates, start from the day AFTER max_ml_date, or use CLI --start-date if provided
+    let incremental_start: Option<String> = if let Some(ref s) = cli.start_date {
+        println!("⚠️  CLI start-date override provided: {}", s);
+        Some(s.clone())
+    } else if let Some(ref ml_date) = max_ml_date {
         let date = chrono::NaiveDate::parse_from_str(ml_date, "%Y%m%d")?;
         let next_date = date + chrono::Duration::days(1);
         Some(next_date.format("%Y%m%d").to_string())
@@ -685,6 +689,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             "Full dataset creation: {} to {} (constrained to global indices availability)",
             final_min_date, final_max_date
         );
+    }
+
+    // Allow CLI overrides for testing: if --start-date or --end-date provided, force the range
+    let mut final_min_date = final_min_date;
+    let mut final_max_date = final_max_date;
+    if let Some(ref s) = cli.start_date {
+        final_min_date = s.clone();
+        println!("⚠️  CLI override: forcing start_date = {}", final_min_date);
+    }
+    if let Some(ref e) = cli.end_date {
+        final_max_date = e.clone();
+        println!("⚠️  CLI override: forcing end_date = {}", final_max_date);
     }
 
     // Pre-fetch industry performance data once for all stocks (for full date range)
@@ -1132,11 +1148,12 @@ async fn batch_insert_feature_rows(
             sql.push(')');
         }
 
-        // Upsert: for existing rows, update only the newly introduced columns if they are currently NULL
+        // Upsert: overwrite industry-related fields to ensure corrected lagged values replace previous (possibly leaked) values
         sql.push_str(" ON CONFLICT (ts_code, trade_date) DO UPDATE SET \
-            industry_avg_return = COALESCE(ml_training_dataset.industry_avg_return, EXCLUDED.industry_avg_return), \
-            stock_vs_industry = COALESCE(ml_training_dataset.stock_vs_industry, EXCLUDED.stock_vs_industry), \
-            industry_momentum_5d = COALESCE(ml_training_dataset.industry_momentum_5d, EXCLUDED.industry_momentum_5d)");
+            industry_avg_return = EXCLUDED.industry_avg_return, \
+            stock_vs_industry = EXCLUDED.stock_vs_industry, \
+            industry_momentum_5d = EXCLUDED.industry_momentum_5d, \
+            industry_momentum = EXCLUDED.industry_momentum");
 
         // Build the query with all bindings
         let mut query = sqlx::query(&sql);
@@ -2221,16 +2238,13 @@ async fn calculate_features_for_stock_sync(
         // Returns the most recent industry_perf_data entry with date < target_date (strictly prior),
         // to ensure we never use same-day industry averages (avoids look-ahead and handles suspensions).
         let get_industry_for_date = |ind: &str, target_date: &str| {
-            // Try exact match first (for prior-date lookups caller may pass previous date)
-            if let Some(val) = industry_perf_data.get(&(ind.to_string(), target_date.to_string())) {
-                return Some(*val);
-            }
-            // Otherwise find the most recent date strictly before target_date
+            // Find the most recent industry entry with date strictly before target_date
             let mut candidates: Vec<_> = industry_perf_data
                 .iter()
                 .filter(|((i, dt), _)| i == ind && dt.as_str() < target_date)
                 .collect();
-            candidates.sort_by(|(a, _), (b, _)| b.0.cmp(&a.0)); // sort by (industry,date) descending on key (date part)
+            // Sort by date descending and take the first (most recent prior date)
+            candidates.sort_by(|((_, da), _), ((_, db), _)| db.cmp(da));
             candidates.first().map(|(_, v)| (*v).clone())
         };
 
@@ -2427,9 +2441,18 @@ async fn calculate_features_for_stock_sync(
         // Use most-recent industry performance strictly prior to the current `trade_date` to avoid look-ahead.
         let (industry_avg_return, industry_momentum_5d) = if let Some(ind) = industry {
             // Find latest industry perf entry with date < current trade_date (handles suspensions)
-            if let Some((avg, mom5)) = get_industry_for_date(ind, &day.trade_date) {
+            let res = get_industry_for_date(ind, &day.trade_date);
+            if let Some((avg, mom5)) = res {
+                // Debug for suspicious date range to ensure strict prior-date selection
+                if day.trade_date >= "20210110" && day.trade_date <= "20210131" {
+                    println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, chosen_avg={}, chosen_mom5={}", ts_code, day.trade_date, ind, avg, mom5);
+                }
                 (Some(avg), Some(mom5))
             } else {
+                // Debug missing prior entry
+                if day.trade_date >= "20210110" && day.trade_date <= "20210131" {
+                    println!("[DEBUG] industry lookup: ts_code={}, trade_date={}, industry={}, NO_PRIOR_FOUND", ts_code, day.trade_date, ind);
+                }
                 (None, None)
             }
         } else {
