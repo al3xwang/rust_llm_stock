@@ -932,9 +932,9 @@ async fn insert_feature_row(
             next_day_direction, next_3day_return, next_3day_direction,
             pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days
         ) VALUES (
-            -- 1-125: all columns including HSI, USDCNH, and moneyflow
+            -- 1-126: all columns including HSI, USDCNH, and moneyflow
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,$94,$95,$96,
-            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125
+            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125,$126
         )
         ON CONFLICT (ts_code, trade_date) DO UPDATE SET
             industry_avg_return = COALESCE(ml_training_dataset.industry_avg_return, EXCLUDED.industry_avg_return),
@@ -1042,6 +1042,8 @@ async fn insert_feature_row(
     .bind(row.industry_avg_return)
     .bind(row.stock_vs_industry)
     .bind(row.industry_momentum_5d)
+    .bind(row.industry_momentum)
+    .bind(row.industry_momentum)
     .bind(row.turnover_rate)
     .bind(row.turnover_rate_f)
     .bind(row.pe)
@@ -1105,7 +1107,7 @@ async fn batch_insert_feature_rows(
                 index_chinext_vs_ma20_pct, index_xin9_pct_chg, index_xin9_vs_ma5_pct, index_xin9_vs_ma20_pct,
                 index_hsi_pct_chg, index_hsi_vs_ma5_pct, index_hsi_vs_ma20_pct,
                 fx_usdcnh_pct_chg, fx_usdcnh_vs_ma5_pct, fx_usdcnh_vs_ma20_pct,
-                net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow, industry_avg_return, stock_vs_industry, industry_momentum_5d,
+                net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow, industry_avg_return, stock_vs_industry, industry_momentum_5d, industry_momentum,
                 turnover_rate, turnover_rate_f, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share,
                 free_share, total_mv, circ_mv,
                 vol_percentile, high_vol_regime, next_day_return,
@@ -1115,7 +1117,7 @@ async fn batch_insert_feature_rows(
         );
 
         // Generate value placeholders for each row
-        let cols_per_row = 125;
+        let cols_per_row = 126;
         for (row_idx, _row) in chunk.iter().enumerate() {
             if row_idx > 0 {
                 sql.push_str(", ");
@@ -1241,6 +1243,7 @@ async fn batch_insert_feature_rows(
                 .bind(row.industry_avg_return)
                 .bind(row.stock_vs_industry)
                 .bind(row.industry_momentum_5d)
+                .bind(row.industry_momentum)
                 .bind(row.turnover_rate)
                 .bind(row.turnover_rate_f)
                 .bind(row.pe)
@@ -1529,6 +1532,8 @@ struct FeatureRow {
     industry_avg_return: Option<f64>,
     stock_vs_industry: Option<f64>,
     industry_momentum_5d: Option<f64>,
+    // Industry momentum: yesterday's ChiNext pct_chg for the stock's industry
+    industry_momentum: Option<f64>,
 
     vol_percentile: Option<f64>,
     high_vol_regime: Option<i16>,
@@ -2191,7 +2196,7 @@ async fn calculate_features_for_stock_sync(
             // Forward-fill: find most recent date before current date
             let mut candidates: Vec<_> = index_data
                 .iter()
-                .filter(|((idx_code, idx_date), _)| idx_code == code && idx_date < date)
+                .filter(|((idx_code, idx_date), _)| idx_code == code && idx_date.as_str() < date.as_str())
                 .collect();
 
             candidates.sort_by(|(a, _), (b, _)| b.1.cmp(&a.1)); // Sort by date descending
@@ -2199,8 +2204,32 @@ async fn calculate_features_for_stock_sync(
             candidates.first().map(|(_, data)| (*data).clone())
         };
 
+        // Helper: fetch index data for an explicit date (with forward-fill)
+        let get_index_for_date = |code: &str, dt: &str| {
+            if let Some(data) = index_data.get(&(code.to_string(), dt.to_string())) {
+                return Some(data.clone());
+            }
+            let mut candidates: Vec<_> = index_data
+                .iter()
+                .filter(|((idx_code, idx_date), _)| idx_code == code && idx_date.as_str() < dt)
+                .collect();
+            candidates.sort_by(|(a, _), (b, _)| b.1.cmp(&a.1)); // Sort by date descending
+            candidates.first().map(|(_, data)| (*data).clone())
+        };
+
+        // Determine previous trading date (if available) and use it for index lookups
+        let prev_date_opt = if i > 0 {
+            Some(daily_data[i - 1].trade_date.clone())
+        } else {
+            None
+        };
+
         // CSI300
-        let csi300 = get_index("000300.SH");
+        let csi300 = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("000300.SH", pd)
+        } else {
+            None
+        };
         let index_csi300_pct_chg = csi300.as_ref().map(|x| Some(x.pct_chg)).flatten();
         let index_csi300_vs_ma5_pct = csi300.as_ref().and_then(|x| match x.ma5 {
             Some(ma5) if ma5.abs() > 1e-6 => Some((x.close - ma5) / ma5 * 100.0),
@@ -2212,7 +2241,11 @@ async fn calculate_features_for_stock_sync(
         });
 
         // ChiNext
-        let chinext = get_index("399006.SZ");
+        let chinext = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("399006.SZ", pd)
+        } else {
+            None
+        };
         let index_chinext_pct_chg = chinext.as_ref().map(|x| Some(x.pct_chg)).flatten();
         let index_chinext_vs_ma5_pct = chinext.as_ref().and_then(|x| match x.ma5 {
             Some(ma5) if ma5.abs() > 1e-6 => Some((x.close - ma5) / ma5 * 100.0),
@@ -2224,7 +2257,11 @@ async fn calculate_features_for_stock_sync(
         });
 
         // XIN9
-        let xin9 = get_index("XIN9");
+        let xin9 = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("XIN9", pd)
+        } else {
+            None
+        };
         let index_xin9_pct_chg = xin9.as_ref().map(|x| Some(x.pct_chg)).flatten();
         let index_xin9_vs_ma5_pct = xin9.as_ref().and_then(|x| match x.ma5 {
             Some(ma5) if ma5.abs() > 1e-6 => Some((x.close - ma5) / ma5 * 100.0),
@@ -2236,7 +2273,11 @@ async fn calculate_features_for_stock_sync(
         });
 
         // HSI (Hong Kong Hang Seng Index)
-        let hsi = get_index("HSI");
+        let hsi = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("HSI", pd)
+        } else {
+            None
+        };
         let index_hsi_pct_chg = hsi.as_ref().map(|x| Some(x.pct_chg)).flatten();
         let index_hsi_vs_ma5_pct = hsi.as_ref().and_then(|x| match x.ma5 {
             Some(ma5) if ma5.abs() > 1e-6 => Some((x.close - ma5) / ma5 * 100.0),
@@ -2248,7 +2289,11 @@ async fn calculate_features_for_stock_sync(
         });
 
         // USDCNH (USD/CNH FX rate)
-        let usdcnh = get_index("USDCNH.FXCM");
+        let usdcnh = if let Some(ref pd) = prev_date_opt {
+            get_index_for_date("USDCNH.FXCM", pd)
+        } else {
+            None
+        };
         let fx_usdcnh_pct_chg = usdcnh.as_ref().map(|x| Some(x.pct_chg)).flatten();
         let fx_usdcnh_vs_ma5_pct = usdcnh.as_ref().and_then(|x| match x.ma5 {
             Some(ma5) if ma5.abs() > 1e-6 => Some((x.close - ma5) / ma5 * 100.0),
@@ -2258,6 +2303,17 @@ async fn calculate_features_for_stock_sync(
             Some(ma20) if ma20.abs() > 1e-6 => Some((x.close - ma20) / ma20 * 100.0),
             _ => None,
         });
+
+        // industry_momentum: yesterday's ChiNext pct_chg (shift by 1 within each industry)
+        let industry_momentum = if i > 0 {
+            let prev_date = &daily_data[i - 1].trade_date;
+            get_index_for_date("399006.SZ", prev_date)
+                .as_ref()
+                .map(|x| Some(x.pct_chg))
+                .flatten()
+        } else {
+            None
+        };
 
         // --- Volatility percentile and regime ---
         let vol_60 = if closes.len() >= 60 {
@@ -2351,10 +2407,17 @@ async fn calculate_features_for_stock_sync(
         };
 
         // Industry features (lookup from pre-fetched map)
+        // Use previous trading date to avoid look-ahead leakage (shift by 1)
         let (industry_avg_return, industry_momentum_5d) = if let Some(ind) = industry {
-            if let Some((avg, mom5)) = industry_perf_data.get(&(ind.to_string(), day.trade_date.clone())) {
-                (Some(*avg), Some(*mom5))
+            if i > 0 {
+                let prev_date = daily_data[i - 1].trade_date.clone();
+                if let Some((avg, mom5)) = industry_perf_data.get(&(ind.to_string(), prev_date)) {
+                    (Some(*avg), Some(*mom5))
+                } else {
+                    (None, None)
+                }
             } else {
+                // No prior date available for the first row
                 (None, None)
             }
         } else {
@@ -2643,6 +2706,7 @@ async fn calculate_features_for_stock_sync(
                 industry_avg_return,
                 stock_vs_industry,
                 industry_momentum_5d,
+                industry_momentum,
 
                 // --- Map daily_basic fields by date ---
                 turnover_rate: daily_basic.as_ref().map(|db| db.turnover_rate),
@@ -2715,6 +2779,7 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_avg_return DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS stock_vs_industry DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum_5d DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum DOUBLE PRECISION;",
     ];
 
     // Run CREATE with PRIMARY KEY
