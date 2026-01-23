@@ -15,6 +15,9 @@ use ta::{
     },
 };
 
+// Current date guard for leakage checks (YYYYMMDD)
+const CURRENT_DATE: &str = "20260123";
+
 /// Struct to hold daily data (raw values)
 #[derive(Debug, Clone)]
 struct AdjustedDailyData {
@@ -574,6 +577,13 @@ struct Cli {
     /// Verbose: print debug diagnostic messages (disabled by default)
     #[arg(long, default_value_t = false)]
     verbose: bool,
+    /// Leak check mode: run a single-stock leakage validation and abort on leak
+    #[arg(long, default_value_t = false)]
+    leak_check: bool,
+
+    /// Stock code to run leak-check on (optional). If not provided, first stock is used.
+    #[arg(long)]
+    leak_stock: Option<String>,
 }
 
 #[tokio::main]
@@ -588,7 +598,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Get ALL stocks from stock_basic table
     // Process full date range available in adjusted_stock_daily table
-    let stocks = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+    let mut stocks = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
         r#"
         SELECT DISTINCT 
             sb.ts_code,
@@ -621,6 +631,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let processing_start = std::time::Instant::now();
+
+    // If leak_check requested, restrict to single stock and force sequential processing
+    let concurrency = if cli.leak_check { 1usize } else { cli.concurrency };
+    if cli.leak_check {
+        let selected = cli
+            .leak_stock
+            .clone()
+            .or_else(|| stocks.get(0).map(|s| s.0.clone()));
+        if let Some(ts) = selected {
+            stocks.retain(|(code, _, _, _)| code == &ts);
+            if stocks.is_empty() {
+                eprintln!("⚠️  leak-check: specified stock {} not found in stock list", ts);
+                std::process::exit(3);
+            }
+            println!("Running leak-check for {} (concurrency forced to 1)", ts);
+        }
+    }
 
     // Check max date in ml_training_dataset for incremental backfill
     eprintln!("[DEBUG] Step 2: About to query max_ml_date");
@@ -659,7 +686,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     .fetch_one(&dbpool)
     .await?;
 
-    let (min_date, max_date) = date_range;
+    let min_date = date_range.0;
+    let max_date = date_range.1;
 
     // Fix: If incremental start date is after max_date, do a full rebuild instead
     let (final_min_date, final_max_date) = if min_date > max_date {
@@ -678,9 +706,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 )
             })
             .unwrap_or_else(|| "20110101".to_string());
-        (full_start, max_date)
+        (full_start, max_date.clone())
     } else {
-        (min_date, max_date)
+        (min_date.clone(), max_date.clone())
     };
 
     if let Some(ref ml_date) = max_ml_date {
@@ -707,6 +735,39 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         println!("⚠️  CLI override: forcing end_date = {}", final_max_date);
     }
 
+    // Add a constant for the current date to ensure no future dates are used
+    const CURRENT_DATE: &str = "20260123";
+
+    // Update all date parameters to ensure they do not exceed the current date
+    let max_date = if max_date.as_str() > CURRENT_DATE {
+        println!("⚠️  max_date exceeds current date. Adjusting to {}.", CURRENT_DATE);
+        CURRENT_DATE.to_string()
+    } else {
+        max_date
+    };
+
+    let final_max_date = if final_max_date.as_str() > CURRENT_DATE {
+        println!("⚠️  final_max_date exceeds current date. Adjusting to {}.", CURRENT_DATE);
+        CURRENT_DATE.to_string()
+    } else {
+        final_max_date
+    };
+
+    let fetch_start = chrono::NaiveDate::parse_from_str(&min_date, "%Y%m%d")
+        .ok()
+        .and_then(|d| {
+            let adjusted_date = (d - chrono::Duration::days(400))
+                .format("%Y%m%d")
+                .to_string();
+            if adjusted_date.as_str() > CURRENT_DATE {
+                println!("⚠️  fetch_start exceeds current date. Adjusting to {}.", CURRENT_DATE);
+                Some(CURRENT_DATE.to_string())
+            } else {
+                Some(adjusted_date)
+            }
+        })
+        .unwrap_or_else(|| "20100101".to_string());
+
     // Pre-fetch industry performance data once for all stocks (for full date range)
     println!("\n=== Pre-fetching Industry Performance Data ===");
     let industry_perf_data =
@@ -732,7 +793,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut final_skipped: usize = 0;
     let mut final_records: usize = 0;
 
-    if cli.concurrency <= 1 {
+    if concurrency <= 1 {
         println!("\n=== Processing {} stocks (sequential) ===\n", total_stocks);
 
         // Simple counters for progress tracking
@@ -756,6 +817,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 &final_max_date,
                 &index_data,
                 cli.verbose,
+                cli.leak_check,
             )
             .await;
             let calc_elapsed = calc_start.elapsed().as_millis();
@@ -818,7 +880,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
         }
     } else {
-        println!("\n=== Processing {} stocks (concurrency={}) ===\n", total_stocks, cli.concurrency);
+        println!("\n=== Processing {} stocks (concurrency={}) ===\n", total_stocks, concurrency);
 
         let processed = Arc::new(AtomicUsize::new(0));
         let skipped = Arc::new(AtomicUsize::new(0));
@@ -850,6 +912,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         &final_max_date,
                         &index_data,
                         verbose,
+                        cli.leak_check,
                     )
                     .await;
                     let calc_elapsed = calc_start.elapsed().as_millis();
@@ -1065,7 +1128,6 @@ async fn insert_feature_row(
     .bind(row.industry_avg_return)
     .bind(row.stock_vs_industry)
     .bind(row.industry_momentum_5d)
-    .bind(row.industry_momentum)
     .bind(row.industry_momentum)
     .bind(row.turnover_rate)
     .bind(row.turnover_rate_f)
@@ -1741,19 +1803,27 @@ async fn calculate_features_for_stock_sync(
     max_date: &str,
     index_data: &HashMap<(String, String), IndexDaily>,
     verbose: bool,
+    leak_check: bool,
 ) -> Vec<FeatureRow> {
     let _stock_start = std::time::Instant::now();
+
+    // Collector for any leakage issues detected during feature computation
+    let leak_issues = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
     // For feature calculation, we need historical context (252+ trading days for 52-week features)
     // Fetch data from min_date - 400 days to ensure we have enough history
     let fetch_start = chrono::NaiveDate::parse_from_str(min_date, "%Y%m%d")
         .ok()
         .and_then(|d| {
-            Some(
-                (d - chrono::Duration::days(400))
-                    .format("%Y%m%d")
-                    .to_string(),
-            )
+            let adjusted_date = (d - chrono::Duration::days(400))
+                .format("%Y%m%d")
+                .to_string();
+            if adjusted_date.as_str() > CURRENT_DATE {
+                println!("⚠️  fetch_start exceeds current date. Adjusting to {}.", CURRENT_DATE);
+                Some(CURRENT_DATE.to_string())
+            } else {
+                Some(adjusted_date)
+            }
         })
         .unwrap_or_else(|| "20100101".to_string());
 
@@ -2223,6 +2293,13 @@ async fn calculate_features_for_stock_sync(
         let get_index = |code: &str| {
             // Try exact date first
             if let Some(data) = index_data.get(&(code.to_string(), date.clone())) {
+                if leak_check {
+                    // exact match uses the requested date
+                    let selected_date = date.clone();
+                    if selected_date.as_str() > CURRENT_DATE {
+                        leak_issues.lock().unwrap().push(format!("index {} exact-match selected date {} > CURRENT_DATE {} for {}", code, selected_date, CURRENT_DATE, ts_code));
+                    }
+                }
                 return Some(data.clone());
             }
 
@@ -2234,12 +2311,30 @@ async fn calculate_features_for_stock_sync(
 
             candidates.sort_by(|(a, _), (b, _)| b.1.cmp(&a.1)); // Sort by date descending
 
-            candidates.first().map(|(_, data)| (*data).clone())
+            if let Some(((_, sel_date), data)) = candidates.first() {
+                if leak_check {
+                    // sel_date should be strictly less than the target date
+                    if sel_date.as_str() >= date.as_str() {
+                        leak_issues.lock().unwrap().push(format!("index {} forward-fill selected date {} >= target date {} for {}", code, sel_date, date, ts_code));
+                    }
+                    if sel_date.as_str() > CURRENT_DATE {
+                        leak_issues.lock().unwrap().push(format!("index {} forward-fill selected date {} > CURRENT_DATE {} for {}", code, sel_date, CURRENT_DATE, ts_code));
+                    }
+                }
+                return Some((*data).clone());
+            }
+            None
         };
 
         // Helper: fetch index data for an explicit date (with forward-fill)
         let get_index_for_date = |code: &str, dt: &str| {
             if let Some(data) = index_data.get(&(code.to_string(), dt.to_string())) {
+                if leak_check {
+                    let sel_date = dt.to_string();
+                    if sel_date.as_str() > CURRENT_DATE {
+                        leak_issues.lock().unwrap().push(format!("index {} exact-match selected date {} > CURRENT_DATE {} for {}", code, sel_date, CURRENT_DATE, ts_code));
+                    }
+                }
                 return Some(data.clone());
             }
             let mut candidates: Vec<_> = index_data
@@ -2247,7 +2342,18 @@ async fn calculate_features_for_stock_sync(
                 .filter(|((idx_code, idx_date), _)| idx_code == code && idx_date.as_str() < dt)
                 .collect();
             candidates.sort_by(|(a, _), (b, _)| b.1.cmp(&a.1)); // Sort by date descending
-            candidates.first().map(|(_, data)| (*data).clone())
+            if let Some(((_, sel_date), data)) = candidates.first() {
+                if leak_check {
+                    if sel_date.as_str() >= dt {
+                        leak_issues.lock().unwrap().push(format!("index {} forward-fill selected date {} >= requested date {} for {}", code, sel_date, dt, ts_code));
+                    }
+                    if sel_date.as_str() > CURRENT_DATE {
+                        leak_issues.lock().unwrap().push(format!("index {} forward-fill selected date {} > CURRENT_DATE {} for {}", code, sel_date, CURRENT_DATE, ts_code));
+                    }
+                }
+                return Some((*data).clone());
+            }
+            None
         };
 
         // Helper: fetch industry performance for an industry and a target date.
@@ -2260,6 +2366,15 @@ async fn calculate_features_for_stock_sync(
                         if idx == 0 {
                             None
                         } else {
+                            let selected_date = vec[idx - 1].0.clone();
+                            if leak_check {
+                                if selected_date.as_str() >= target_date {
+                                    leak_issues.lock().unwrap().push(format!("industry {} lookup selected date {} >= target_date {} for {}", ind, selected_date, target_date, ts_code));
+                                }
+                                if selected_date.as_str() > CURRENT_DATE {
+                                    leak_issues.lock().unwrap().push(format!("industry {} lookup selected date {} > CURRENT_DATE {} for {}", ind, selected_date, CURRENT_DATE, ts_code));
+                                }
+                            }
                             let vals = &vec[idx - 1].1;
                             Some(*vals)
                         }
@@ -2268,6 +2383,15 @@ async fn calculate_features_for_stock_sync(
                         if idx == 0 {
                             None
                         } else {
+                            let selected_date = vec[idx - 1].0.clone();
+                            if leak_check {
+                                if selected_date.as_str() >= target_date {
+                                    leak_issues.lock().unwrap().push(format!("industry {} lookup selected date {} >= target_date {} for {}", ind, selected_date, target_date, ts_code));
+                                }
+                                if selected_date.as_str() > CURRENT_DATE {
+                                    leak_issues.lock().unwrap().push(format!("industry {} lookup selected date {} > CURRENT_DATE {} for {}", ind, selected_date, CURRENT_DATE, ts_code));
+                                }
+                            }
                             let vals = &vec[idx - 1].1;
                             Some(*vals)
                         }
@@ -2556,7 +2680,6 @@ async fn calculate_features_for_stock_sync(
         let sector_momentum_vs_market = if industry.is_some() && price_momentum_5.is_some() {
             // This is a placeholder - full implementation requires sector aggregation
             // For now, we'll compute it as 0.0 and update in a second pass
-            // The proper implementation requires querying all stocks in the same sector
             Some(0.0)
         } else {
             None
@@ -2819,7 +2942,27 @@ async fn calculate_features_for_stock_sync(
             });
         } // end if day.trade_date >= min_date
     }
-    features
+    // Runtime guard: drop any feature rows with trade_date after CURRENT_DATE
+    let total_rows = features.len();
+    let filtered: Vec<FeatureRow> = features
+        .into_iter()
+        .filter(|r| r.trade_date.as_str() <= CURRENT_DATE)
+        .collect();
+    let dropped = total_rows.saturating_sub(filtered.len());
+    if dropped > 0 {
+        eprintln!("⚠️  Dropped {} future-dated feature rows (CURRENT_DATE={}) for {}", dropped, CURRENT_DATE, ts_code);
+    }
+    // If leak_check was enabled and we found any lookup issues, abort with details
+    if leak_check && !leak_issues.lock().unwrap().is_empty() {
+        let issues = leak_issues.lock().unwrap();
+        eprintln!("\n🚨 Data leakage issues detected for {}: {} issues:\n", ts_code, issues.len());
+        for issue in issues.iter() {
+            eprintln!(" - {}", issue);
+        }
+        eprintln!("Aborting due to data leakage detection (exit code 2)");
+        std::process::exit(2);
+    }
+    filtered
 }
 
 /// Helper function to create the machine learning training dataset table
