@@ -109,6 +109,10 @@ pub fn train_with_torch(
         early_stop_patience
     );
     println!("");
+    println!("Loss function: {}", match huber_delta {
+        Some(d) => format!("Huber (delta={})", d),
+        None => "MSE".to_string(),
+    });
 
     let mut best_valid_loss = f64::MAX;
     let mut epochs_without_improvement = 0;
