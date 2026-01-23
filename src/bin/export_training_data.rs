@@ -49,36 +49,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Get column names
+    // Get column names (normalize by trimming whitespace)
     let columns = rows[0].columns();
-    let all_colnames: Vec<&str> = columns.iter().map(|c| c.name()).collect();
+    let all_colnames: Vec<String> = columns
+        .iter()
+        .map(|c| c.name().trim().to_string())
+        .collect();
 
-    // Define which columns are targets/labels (do NOT export as features)
-    let target_cols = [
-        "next_day_return",
-        "next_day_direction",
-        "next_3day_return",
-        "next_3day_direction",
-    ];
+    // Target columns (lowercase names used for comparison)
+    let target_cols = ["next_day_return", "next_day_direction", "next_3day_return", "next_3day_direction"];
 
     // Always exclude these from features (metadata)
     let meta_cols: [&str; 2] = ["id", "created_at"];
+
 
     // Always include these as identifiers in CSV
     let id_cols = ["ts_code", "trade_date"];
 
     // Build feature columns: all except targets and meta, but keep id_cols at front
-    let feature_cols: Vec<&str> = all_colnames
+    // Use normalized lowercase comparisons to avoid whitespace/case mismatches.
+    let feature_cols: Vec<String> = all_colnames
         .iter()
-        .filter(|c| !target_cols.contains(c) && !meta_cols.contains(c) && !id_cols.contains(c))
-        .copied()
+        .filter(|c| {
+            let lc = c.to_lowercase();
+            // strictly exclude any column that is a known target or meta or id
+            if target_cols.iter().any(|t| lc == *t) {
+                return false;
+            }
+            if meta_cols.iter().any(|m| lc == *m) {
+                return false;
+            }
+            if id_cols.iter().any(|i| lc == *i) {
+                return false;
+            }
+            // Also exclude any column that appears to be a future-derived field (starts with "next_")
+            if lc.starts_with("next_") {
+                return false;
+            }
+            true
+        })
+        .cloned()
         .collect();
 
     // Final CSV columns: id_cols + feature_cols + target_cols
-    let mut csv_cols = Vec::new();
-    csv_cols.extend_from_slice(&id_cols);
+    let mut csv_cols: Vec<String> = Vec::new();
+    for &id in &id_cols {
+        csv_cols.push(id.to_string());
+    }
     csv_cols.extend_from_slice(&feature_cols);
-    csv_cols.extend_from_slice(&target_cols);
+    for &t in &target_cols {
+        csv_cols.push(t.to_string());
+    }
+
+    // Sanity checks: ensure no feature equals any target (case-insensitive)
+    for f in &feature_cols {
+        for &t in &target_cols {
+            if f.eq_ignore_ascii_case(t) {
+                panic!("Feature column '{}' matches target column '{}' — aborting export", f, t);
+            }
+        }
+    }
 
     // Skipping full training_data.csv export — this file is not used for model training.
     println!("Skipping export of training_data.csv (disabled)");
@@ -129,9 +159,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             writeln!(writer, "{}", csv_cols.join(","))?;
             for row in rows {
                 let mut vals = Vec::with_capacity(csv_cols.len());
-                for &col in &csv_cols {
-                    let idx = all_colnames.iter().position(|&c| c == col).unwrap();
-                    let val = row.try_get_raw(idx);
+                    for col in &csv_cols {
+                        let idx = all_colnames.iter().position(|c| c == col).unwrap();
+                        let val = row.try_get_raw(idx);
                     let s = if val.is_ok() && !val.as_ref().unwrap().is_null() {
                         if let Ok(v) = row.try_get::<&str, _>(idx) {
                             v.to_string()

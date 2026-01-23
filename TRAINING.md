@@ -70,7 +70,7 @@ cargo run --release --bin train --features pytorch -- --train data/sample_train.
 - CPU run (small):
 
 ```bash
-cargo run --release --bin train --features pytorch -- --train /data/train.csv --val /data/val.csv --device cpu --batch 64 --max-epochs 50 --out artifacts/cpu_test
+cargo run --release --bin train --features pytorch -- --train data/train.csv --val data/val.csv --device cpu --batch 64 --max-epochs 50 --out artifacts/cpu_test
 ```
 
 ---
@@ -137,6 +137,10 @@ Note: Resuming training from a checkpoint is not currently automated by the CLI;
 ## Contact
 If you want, I can also commit a short `run_train.sh` wrapper and a `systemd` unit file tuned for your server.
 
+
+
 ---
 
 Good to go? If you want, I can now add a `--resume` flag and a short wrapper script for running under `tmux`/`systemd`.
+
+nohup cargo run --release --bin train --features pytorch -- --train data/train.csv --val data/val.csv --device cuda:0 --batch 256 --lr 1e-4 --out scratch/artifacts --max-epochs 200 --early-stop 25 --sample-weight-method time_decay --sample-weight-decay 0.1 --sample-weight-normalize mean --lr-scheduler cosine_restart --cosine-t-max 50 --t-mult 2 --huber-delta 1.0 --grad-clip 5.0 > train.log 2>&1 &
