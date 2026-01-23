@@ -2231,7 +2231,7 @@ async fn calculate_features_for_stock_sync(
                 .filter(|((i, dt), _)| i == ind && dt.as_str() < target_date)
                 .collect();
             candidates.sort_by(|(a, _), (b, _)| b.0.cmp(&a.0)); // sort by (industry,date) descending on key (date part)
-            candidates.first().map(|(_, v)| *v)
+            candidates.first().map(|(_, v)| (*v).clone())
         };
 
         // Determine previous trading date (if available) and use it for index lookups
