@@ -12,6 +12,9 @@ set -euo pipefail
 #   6) detach        - 0 or 1: run detached in a GNU Screen session when set to 1 (default: 0)
 #   7) huber_delta   - numeric delta value passed to the training binary when loss='huber' (default: 1.0). Can also be set with the named flag `--huber-delta N` which overrides the positional value.
 #
+# Optional flags:
+#   --print-config   - print the resolved configuration and exit (dry-run)
+#
 # If the final arg 'detach' is set to 1, the entire run will be executed inside a detached
 # GNU Screen session. Logs are written to ./logs/run_training_<timestamp>.log
 #
@@ -29,6 +32,9 @@ set -euo pipefail
 # 4) Quick smoke run, no GPU, MSE loss, small history-window:
 #    ./scripts/run_training_gpu.sh 3 0 0 mse 0.0
 #
+# 5) Print resolved config (dry-run):
+#    ./scripts/run_training_gpu.sh --print-config
+#
 # Notes:
 # - The script assumes binaries: `dataset_creator`, `export_training_data`, and `train` exist and accept the flags shown.
 # - For detached runs a timestamped log is written under ./logs/ and a screen session is created.
@@ -44,6 +50,7 @@ LOSS=${4:-huber}
 TIME_DECAY=${5:-0.01}
 DETACH=${6:-0}
 HUBER_DELTA=${7:-1.0}
+PRINT_CONFIG=0
 
 # Allow named override: --huber-delta <value> (overrides positional HUBER_DELTA)
 # Example: ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 --huber-delta 1.5
@@ -58,6 +65,10 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       ;;
+    --print-config)
+      PRINT_CONFIG=1
+      shift
+      ;;
     *)
       shift
       ;;
@@ -67,6 +78,31 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${REPO_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
+
+# Sanitize positional defaults in case the first args were flags (e.g., ./scripts/run_training_gpu.sh --print-config)
+case "${HISTORY_YEARS}" in
+  -*) HISTORY_YEARS=7 ;;
+esac
+case "${MIN_YEARS}" in
+  -*) MIN_YEARS=0 ;;
+esac
+case "${GPUS}" in
+  -*) GPUS=0 ;;
+esac
+
+# If asked, print resolved configuration and exit
+if [ "${PRINT_CONFIG}" -eq 1 ]; then
+  echo "Resolved configuration:" 
+  echo "  REPO_ROOT=${REPO_ROOT}"
+  echo "  HISTORY_YEARS=${HISTORY_YEARS}"
+  echo "  MIN_YEARS=${MIN_YEARS}"
+  echo "  GPUS=${GPUS}"
+  echo "  LOSS=${LOSS}"
+  echo "  TIME_DECAY=${TIME_DECAY}"
+  echo "  DETACH=${DETACH}"
+  echo "  HUBER_DELTA=${HUBER_DELTA}"
+  exit 0
+fi
 
 run_steps() {
   echo "==> Running dataset creator (history=${HISTORY_YEARS} years)"
