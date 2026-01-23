@@ -10,6 +10,8 @@ pub struct StockItem {
     // metadata for sample weighting
     pub last_trade_date: Option<String>, // YYYYMMDD of the last timestep in sequence
     pub dataset_last_date: Option<String>, // most recent date available for that stock dataset
+    // next-day returns aligned with `values` entries (Option<f32> per timestep)
+    pub next_day_returns: Vec<Option<f32>>,
 } 
 
 #[allow(dead_code)]
@@ -195,7 +197,9 @@ impl DummyStockDataset {
                 0.0,
             ]);
         }
-        Some(StockItem { values, last_trade_date: None, dataset_last_date: None })
+        // For dummy data, no next_day_return available — fill with None
+        let nd_returns = vec![None; values.len()];
+        Some(StockItem { values, last_trade_date: None, dataset_last_date: None, next_day_returns: nd_returns })
     }
 
     pub fn len(&self) -> usize {
@@ -364,7 +368,7 @@ impl DbStockDataset {
 
         let datasets: Vec<Self> = grouped_vec
             .into_par_iter()
-            .map(|(ts_code, mut stock_records)| {
+            .map(|(_ts_code, mut stock_records)| {
                 // Sort by trade_date to ensure chronological order
                 stock_records.sort_by(|a, b| a.trade_date.cmp(&b.trade_date));
 
@@ -580,7 +584,15 @@ impl DbStockDataset {
                 0.0,
             ]);
         }
-        Some(StockItem { values, last_trade_date: None, dataset_last_date: None })
+        // Build next_day_returns aligned with values: for each position i in values,
+        // next_day_returns[i] corresponds to the `next_day_return` field of the record at index + i
+        let mut nd_returns: Vec<Option<f32>> = Vec::with_capacity(self.seq_len);
+        for i in 0..self.seq_len {
+            let r = self.records[index + i].next_day_return.map(|v| v as f32);
+            nd_returns.push(r);
+        }
+
+        Some(StockItem { values, last_trade_date: None, dataset_last_date: None, next_day_returns: nd_returns })
     }
 
     pub fn len(&self) -> usize {
