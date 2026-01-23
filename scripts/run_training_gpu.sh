@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Run dataset creation, export latest 5 years data, and start training on GPU
-# Usage: ./scripts/run_training_gpu.sh [history_years] [min_years] [gpus] [loss] [time_decay] [detach] [huber_delta]
+# Usage: ./scripts/run_training_gpu.sh [history_years] [min_years] [gpus] [loss] [time_decay] [detach] [--huber-delta N]
 # Parameters (in order):
 #   1) history_years - number of years of history to include when creating the dataset (default: 7)
 #   2) min_years     - minimum years of history required for export (0 = include all, default: 0)
@@ -10,7 +10,7 @@ set -euo pipefail
 #   4) loss          - loss function name: 'huber' or 'mse' (default: 'huber')
 #   5) time_decay    - float decay parameter passed as TIME_DECAY env var (default: 0.01)
 #   6) detach        - 0 or 1: run detached in a GNU Screen session when set to 1 (default: 0)
-#   7) huber_delta   - numeric delta value passed to the training binary when loss='huber' (default: 1.0)
+#   7) huber_delta   - numeric delta value passed to the training binary when loss='huber' (default: 1.0). Can also be set with the named flag `--huber-delta N` which overrides the positional value.
 #
 # If the final arg 'detach' is set to 1, the entire run will be executed inside a detached
 # GNU Screen session. Logs are written to ./logs/run_training_<timestamp>.log
@@ -20,10 +20,10 @@ set -euo pipefail
 #    ./scripts/run_training_gpu.sh
 #
 # 2) Run with 5 min years filter and Huber loss on GPU 1, foreground:
-#    ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 0 1.0
+#    ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 0 --huber-delta 1.0
 #
 # 3) Run detached in screen (recommended for long runs):
-#    ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 1 1.0
+#    ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 1 --huber-delta 1.0
 #    Then attach: screen -r training_<timestamp>
 #
 # 4) Quick smoke run, no GPU, MSE loss, small history-window:
@@ -44,6 +44,25 @@ LOSS=${4:-huber}
 TIME_DECAY=${5:-0.01}
 DETACH=${6:-0}
 HUBER_DELTA=${7:-1.0}
+
+# Allow named override: --huber-delta <value> (overrides positional HUBER_DELTA)
+# Example: ./scripts/run_training_gpu.sh 7 5 1 huber 0.01 --huber-delta 1.5
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --huber-delta)
+      if [ "$#" -ge 2 ]; then
+        HUBER_DELTA="$2"
+        shift 2
+      else
+        echo "Error: --huber-delta requires an argument" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${REPO_ROOT}/logs"
