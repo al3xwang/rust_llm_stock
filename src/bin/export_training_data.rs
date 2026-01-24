@@ -10,8 +10,8 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[clap(name = "export_training_data")]
 struct Cli {
-    /// Minimum number of years of history required per stock to include in export (default: 0 => include all)
-    #[clap(long, default_value_t = 0usize)]
+    /// Minimum number of years of history required per stock to include in export (default: 2)
+    #[clap(long, default_value_t = 2usize)]
     min_years: usize,
 
     /// Minimum total amount traded in the last ~5 days (CN¥). Stocks with less are excluded (default: 0 -> disabled)
@@ -36,14 +36,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Always include stocks whose code starts with the desired prefixes regardless of liquidity (to ensure coverage).
     // Build the SQL selection; if a minimum 5-day amount threshold is configured, apply it in the selection
     let min_5day_amount = cli.min_5day_amount;
+    let min_years_cond = if cli.min_years > 0 {
+        format!("AND EXISTS (SELECT 1 FROM ml_training_dataset d WHERE d.ts_code = s.ts_code AND d.trade_date <= TO_CHAR((CURRENT_DATE - INTERVAL '{} years'), 'YYYYMMDD'))", cli.min_years)
+    } else {
+        "".to_string()
+    };
     let rows = if min_5day_amount > 0 {
         sqlx::query(&format!(
             r#"
                 WITH eligible AS (
                     -- Stocks with sufficient listing history and presence in ml_training_dataset
+                    -- Exclude names starting with ST or *ST and stocks whose latest close < 2 CNY
                     SELECT s.ts_code
                     FROM stock_basic s
+                    JOIN LATERAL (
+                        SELECT a.close
+                        FROM adjusted_stock_daily a
+                        WHERE a.ts_code = s.ts_code
+                        ORDER BY a.trade_date DESC
+                        LIMIT 1
+                    ) lc ON lc.close >= 2.0
                     WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+                      {min_years_cond}
                       AND EXISTS (
                         SELECT 1 FROM ml_training_dataset d
                         WHERE d.ts_code = s.ts_code
@@ -75,10 +90,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ),
                 selected_stocks AS (
                     -- Top 30 percentile by 3-month traded amount AND meeting last-5d amount threshold
-                    SELECT ts_code FROM liq_rank r JOIN last_5d l ON l.ts_code = r.ts_code WHERE pct_rank <= 30 AND l.amount_5d >= {min_amt}
+                    SELECT r.ts_code FROM liq_rank r JOIN last_5d l ON l.ts_code = r.ts_code WHERE pct_rank <= 30 AND l.amount_5d >= {min_amt}
                     UNION
-                    -- Always include prefix stocks regardless of liquidity threshold
-                    SELECT ts_code FROM eligible WHERE ts_code LIKE '60%' OR ts_code LIKE '00%' OR ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
+                    -- Randomly include half of prefix '60' and '00' stocks; keep full inclusion for 30/68/9
+                    SELECT ts_code FROM (
+                        SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                        FROM eligible WHERE ts_code LIKE '60%'
+                    ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '60%') / 2.0)
+                    UNION
+                    SELECT ts_code FROM (
+                        SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                        FROM eligible WHERE ts_code LIKE '00%'
+                    ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '00%') / 2.0)
+                    UNION
+                    SELECT ts_code FROM eligible WHERE ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
                 )
                 SELECT d.*
                 FROM ml_training_dataset d
@@ -86,18 +111,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                 ORDER BY d.ts_code, d.trade_date
         "#,
-            min_amt = min_5day_amount
+            min_amt = min_5day_amount,
+            min_years_cond = min_years_cond
         ))
         .fetch_all(&pool)
         .await?
     } else {
-        sqlx::query(
+        sqlx::query(&format!(
             r#"
                 WITH eligible AS (
                     -- Stocks with sufficient listing history and presence in ml_training_dataset
+                    -- Exclude names starting with ST or *ST and stocks whose latest close < 2 CNY
                     SELECT s.ts_code
                     FROM stock_basic s
+                    JOIN LATERAL (
+                        SELECT a.close
+                        FROM adjusted_stock_daily a
+                        WHERE a.ts_code = s.ts_code
+                        ORDER BY a.trade_date DESC
+                        LIMIT 1
+                    ) lc ON lc.close >= 2.0
                     WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                      AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+                      {min_years_cond}
                       AND EXISTS (
                         SELECT 1 FROM ml_training_dataset d
                         WHERE d.ts_code = s.ts_code
@@ -121,24 +157,130 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ),
                 selected_stocks AS (
                     -- Top 30 percentile by 3-month traded amount OR explicit prefix inclusion
-                    SELECT ts_code FROM liq_rank WHERE pct_rank <= 30
+                    SELECT r.ts_code FROM liq_rank r WHERE pct_rank <= 30
                     UNION
-                    SELECT ts_code FROM eligible WHERE ts_code LIKE '60%' OR ts_code LIKE '00%' OR ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
+                    -- Randomly include half of prefix '60' and '00' stocks; keep full inclusion for 30/68/9
+                    SELECT ts_code FROM (
+                        SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                        FROM eligible WHERE ts_code LIKE '60%'
+                    ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '60%') / 2.0)
+                    UNION
+                    SELECT ts_code FROM (
+                        SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                        FROM eligible WHERE ts_code LIKE '00%'
+                    ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '00%') / 2.0)
+                    UNION
+                    SELECT ts_code FROM eligible WHERE ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
                 )
                 SELECT d.*
                 FROM ml_training_dataset d
                 JOIN selected_stocks s ON d.ts_code = s.ts_code
                 WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
                 ORDER BY d.ts_code, d.trade_date
-        "#,
-        )
+        "#, min_years_cond = min_years_cond))
         .fetch_all(&pool)
         .await?
     };
 
+
     if rows.is_empty() {
         println!("No data found in ml_training_dataset.");
         return Ok(());
+    }
+
+    // Diagnostics: counts of candidate stocks and exclusions by price/name
+    // Base candidate universe: stocks listed long enough and with ml_training_dataset rows in last 5 years
+    let total_candidates: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT s.ts_code)
+        FROM stock_basic s
+        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND EXISTS (
+            SELECT 1 FROM ml_training_dataset d
+            WHERE d.ts_code = s.ts_code
+              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let excluded_by_price: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT s.ts_code)
+        FROM stock_basic s
+        JOIN LATERAL (
+            SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
+        ) lc ON lc.close < 2.0
+        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND EXISTS (
+            SELECT 1 FROM ml_training_dataset d
+            WHERE d.ts_code = s.ts_code
+              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let excluded_by_name: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT s.ts_code)
+        FROM stock_basic s
+        WHERE (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+          AND s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND EXISTS (
+            SELECT 1 FROM ml_training_dataset d
+            WHERE d.ts_code = s.ts_code
+              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let excluded_by_both: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT s.ts_code)
+        FROM stock_basic s
+        JOIN LATERAL (
+            SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
+        ) lc ON lc.close < 2.0
+        WHERE (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+          AND s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND EXISTS (
+            SELECT 1 FROM ml_training_dataset d
+            WHERE d.ts_code = s.ts_code
+              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let excluded_by_short_history: i64 = if cli.min_years > 0 {
+        sqlx::query_scalar(&format!(r#"
+        SELECT COUNT(DISTINCT s.ts_code)
+        FROM stock_basic s
+        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND NOT EXISTS (
+            SELECT 1 FROM ml_training_dataset d
+            WHERE d.ts_code = s.ts_code
+              AND d.trade_date <= TO_CHAR((CURRENT_DATE - INTERVAL '{} years'), 'YYYYMMDD')
+          )
+        "#, cli.min_years))
+        .fetch_one(&pool)
+        .await?
+    } else {
+        0
+    };
+
+    println!("Candidate stocks before filters: {}", total_candidates);
+    println!("  Excluded by latest close < 2.0: {}", excluded_by_price);
+    println!("  Excluded by name (ST/*ST): {}", excluded_by_name);
+    println!("  Excluded by both price & name: {}", excluded_by_both);
+    if cli.min_years > 0 {
+        println!("  Excluded by short history (< {} years): {}", cli.min_years, excluded_by_short_history);
     }
 
     // Compute selected stock set and print basic coverage statistics
@@ -244,6 +386,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut full_coverage_stocks = 0usize;
     let mut partial_coverage_stocks = 0usize;
     let mut skipped_by_min_years = 0usize;
+    // Diagnostics for date-based splits: how many stocks lack rows in each split
+    let mut missing_train = 0usize;
+    let mut missing_val = 0usize;
+    let mut missing_test = 0usize;
     // min_years from CLI: convert to a minimum required trading days threshold when > 0
     let min_required_days = if cli.min_years > 0 {
         (cli.min_years * trading_days_year) as usize
@@ -264,21 +410,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        if total >= required_per_stock {
-            // Take the most recent required days
-            let model_data = &sorted[total - required_per_stock..];
-            let train_end = train_days;
-            let val_end = train_days + val_days;
-            train_rows.extend_from_slice(&model_data[..train_end]);
-            val_rows.extend_from_slice(&model_data[train_end..val_end]);
-            test_rows.extend_from_slice(&model_data[val_end..]);
-            full_coverage_stocks += 1;
-        } else {
-            // Partial coverage: split available days by proportional shares 70/20/10
-            let model_data = &sorted[..];
+        // Split by fixed date cutoffs (preferred):
+        // Train: trade_date <= 20250229
+        // Val:   20250301 <= trade_date <= 20251103
+        // Test:  trade_date >= 20251104
+        let model_data = &sorted[..];
+        let mut train_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
+        let mut val_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
+        let mut test_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
+        let train_cutoff = "20250229";
+        let val_cutoff = "20251103";
+        for row in model_data.iter() {
+            let d: String = row.try_get("trade_date").unwrap_or_default();
+            if d.as_str() <= train_cutoff {
+                train_part.push(row);
+            } else if d.as_str() <= val_cutoff {
+                val_part.push(row);
+            } else {
+                test_part.push(row);
+            }
+        }
+
+        // Track missing bins for diagnostics
+        if train_part.is_empty() {
+            missing_train += 1;
+        }
+        if val_part.is_empty() {
+            missing_val += 1;
+        }
+        if test_part.is_empty() {
+            missing_test += 1;
+        }
+
+        // If no rows fall into any of the bins (very sparse history), fall back to proportional split
+        if train_part.is_empty() && val_part.is_empty() && test_part.is_empty() {
             let n = model_data.len();
             if n < 3 {
-                // Too few points to form meaningful splits, put all into train as a fallback
                 train_rows.extend_from_slice(model_data);
                 partial_coverage_stocks += 1;
                 continue;
@@ -296,10 +463,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 test_rows.extend_from_slice(&model_data[train_size + val_size..]);
             }
             partial_coverage_stocks += 1;
+            continue;
+        }
+
+        // Use date-split parts
+        if !train_part.is_empty() {
+            train_rows.extend_from_slice(&train_part);
+        }
+        if !val_part.is_empty() {
+            val_rows.extend_from_slice(&val_part);
+        }
+        if !test_part.is_empty() {
+            test_rows.extend_from_slice(&test_part);
+        }
+
+        // Track coverage: if a stock has at least required_per_stock days across the window, consider full_coverage
+        if total >= required_per_stock {
+            full_coverage_stocks += 1;
+        } else {
+            partial_coverage_stocks += 1;
         }
     }
 
-    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, per-stock target days: {} (train {} val {} test {})", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years, required_per_stock, train_days, val_days, test_days);
+    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, per-stock target days: {} (train {} val {} test {}), date cutoffs: train<=20250229 val<=20251103 test>20251103", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years, required_per_stock, train_days, val_days, test_days);
+    println!("Stocks missing bins by date-split: missing_train: {}, missing_val: {}, missing_test: {}", missing_train, missing_val, missing_test);
 
     // Write CSVs for train/val/test
     let mut write_csv =
