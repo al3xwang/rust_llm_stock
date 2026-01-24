@@ -29,7 +29,7 @@ use serde::{ Deserialize, Serialize };
 /// # Example
 ///
 /// ```
-/// use stock_rust::macd::MACDIndicator;
+/// use rust_llm_stock::macd::MACDIndicator;
 /// use ta::Next;
 ///
 /// let mut macd = MACDIndicator::new(12, 26, 9).unwrap();
