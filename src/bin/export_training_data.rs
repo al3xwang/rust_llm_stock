@@ -485,8 +485,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, per-stock target days: {} (train {} val {} test {}), date cutoffs: train<=20250229 val<=20251103 test>20251103", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years, required_per_stock, train_days, val_days, test_days);
+    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, splitting mode: fixed-date cutoffs (train<=20250229, val<=20251103, test>20251103)", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years);
     println!("Stocks missing bins by date-split: missing_train: {}, missing_val: {}, missing_test: {}", missing_train, missing_val, missing_test);
+    if partial_coverage_stocks > 0 {
+        println!("Note: {} stocks required proportional fallback splits. Per-stock target days (fallback): {} (train {} val {} test {})", partial_coverage_stocks, required_per_stock, train_days, val_days, test_days);
+    }
 
     // Write CSVs for train/val/test
     let mut write_csv =
