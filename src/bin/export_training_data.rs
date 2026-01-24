@@ -55,7 +55,7 @@ pub fn parse_val_windows(cli_val_windows: &[String]) -> Result<Vec<(String, Stri
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {"
+async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     // Load DB URL from env or use default
@@ -337,7 +337,7 @@ async fn main() -> Result<(), Box<dyn Error>> {"
     let val_windows_parsed = match parse_val_windows(&cli.val_windows) {
         Ok(v) => v,
         Err(e) => { eprintln!("{}", e); return Ok(()); }
-    };"
+    };
 
     println!("Using train_cutoff={} and {} validation window(s)", train_cutoff, val_windows_parsed.len());
     for (i, (s, e)) in val_windows_parsed.iter().enumerate() {
@@ -574,6 +574,16 @@ async fn main() -> Result<(), Box<dyn Error>> {"
     println!("Stocks missing bins by date-split: missing_train: {}, missing_test: {}, missing_val_per_window: {:?}", missing_train, missing_test, missing_val_per_window);
     if partial_coverage_stocks > 0 {
         println!("Note: {} stocks required proportional fallback splits. Per-stock target days (fallback): {} (train {} val {} test {})", partial_coverage_stocks, required_per_stock, train_days, val_days, test_days);
+    }
+
+    // Sanity check: ensure audit per-stock sums for train/val/test match the rows we will write
+    let audit_train_total: usize = audit_map.values().map(|c| c.get(0).cloned().unwrap_or(0)).sum();
+    let audit_val_totals: Vec<usize> = (0..val_windows_parsed.len()).map(|i| audit_map.values().map(|c| c.get(1 + i).cloned().unwrap_or(0)).sum()).collect();
+    let audit_test_total: usize = audit_map.values().map(|c| c.get(1 + val_windows_parsed.len()).cloned().unwrap_or(0)).sum();
+    let exported_val_totals: Vec<usize> = val_rows_per_window.iter().map(|v| v.len()).collect();
+    if audit_train_total != train_rows.len() || audit_test_total != test_rows.len() || audit_val_totals != exported_val_totals {
+        eprintln!("Audit vs export mismatch: train audit {} vs exported {}, val audit {:?} vs exported {:?}, test audit {} vs exported {}", audit_train_total, train_rows.len(), audit_val_totals, exported_val_totals, audit_test_total, test_rows.len());
+        return Ok(());
     }
 
     // Write CSVs for train/val/test
