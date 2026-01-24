@@ -89,6 +89,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut max_epochs_override: Option<usize> = None;
     let mut early_stop_override: Option<usize> = None;
 
+    // Direction weight (combined for both horizons) default 0.15
+    let mut dir_weight: Option<f64> = None;
+
     // Sample-weighting & scheduler extras
     let mut t_mult: Option<f64> = None;
     let mut sample_weight_method: Option<String> = None;
@@ -218,6 +221,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            "--dir-weight" => {
+                if i + 1 < args.len() {
+                    if let Ok(v) = args[i + 1].parse::<f64>() {
+                        dir_weight = Some(v);
+                        i += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -253,6 +264,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         dropout_override,
         max_epochs_override,
         early_stop_override,
+        dir_weight,
     )?;
     Ok(())
 }

@@ -31,6 +31,7 @@ pub fn train_with_torch(
     dropout_override: Option<f32>,
     max_epochs_override: Option<usize>,
     early_stop_override: Option<usize>,
+    direction_weight: Option<f64>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
@@ -202,6 +203,7 @@ pub fn train_with_torch(
             sample_weight_method.as_deref().unwrap_or("none"),
             sample_weight_decay,
             sample_weight_normalize.as_deref().unwrap_or("mean"),
+            weight_direction,
         )?;
         println!(
             "  Train Loss: {:.6} (MSE: {:.6}, Dir: {:.6})",
@@ -210,7 +212,7 @@ pub fn train_with_torch(
 
         // Validation
         let valid_loss =
-            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len, huber_delta, compute_ic, &topk_percentiles, sample_weight_method.as_deref().unwrap_or("none"), sample_weight_decay, sample_weight_normalize.as_deref().unwrap_or("mean"))?; // validation excludes weight decay term
+            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len, huber_delta, compute_ic, &topk_percentiles, sample_weight_method.as_deref().unwrap_or("none"), sample_weight_decay, sample_weight_normalize.as_deref().unwrap_or("mean"), weight_direction)?; // validation excludes weight decay term
         println!("  Valid Loss: {:.6}", valid_loss);
 
         // Save best model and track improvement
@@ -284,6 +286,7 @@ fn train_epoch_stream(
     sample_weight_method: &str,
     sample_weight_decay: f64,
     sample_weight_normalize: &str,
+    direction_weight: f64,
 ) -> Result<(f64, f64, f64)> {
     let mut total_loss = 0.0;
     let mut total_mse = 0.0;
@@ -293,7 +296,8 @@ fn train_epoch_stream(
     // Dual-task learning weights
     let weight_1day_mse = 0.60; // 1-day MSE: 60%
     let weight_3day_mse = 0.25; // 3-day MSE: 25%
-    let weight_direction = 0.15; // Direction loss: 15% (combined for both horizons)
+    // Direction weight: default 0.15 unless CLI overrides via --dir-weight
+    let weight_direction = direction_weight.unwrap_or(0.15); // Direction loss: combined for both horizons
 
     // Preallocate reusable device buffers to reduce allocation churn
     let mut dev_inputs_buf: Option<Tensor> = None;
@@ -524,6 +528,7 @@ fn validate_epoch_stream(
     sample_weight_method: &str,
     sample_weight_decay: f64,
     sample_weight_normalize: &str,
+    direction_weight: f64,
 ) -> Result<f64> {
     let mut total_loss = 0.0;
     let mut num_batches = 0;
@@ -531,7 +536,7 @@ fn validate_epoch_stream(
     // Dual-task learning weights (same as training)
     let weight_1day_mse = 0.60;
     let weight_3day_mse = 0.25;
-    let weight_direction = 0.15;
+    let weight_direction = direction_weight; // passed from caller (default to 0.15 in train_with_torch)
 
     // Reusable device buffers
     let mut dev_inputs_buf: Option<Tensor> = None;

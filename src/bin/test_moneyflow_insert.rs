@@ -4,7 +4,7 @@ use sqlx::Row;
 
 #[tokio::test]
 async fn test_moneyflow_features_inserted() {
-    let pool = get_connection().await.expect("DB connection failed");
+    let pool: sqlx::Pool<sqlx::Postgres> = get_connection().await;
     // Pick a recent date and a known stock code for the test
     let ts_code = "000001.SZ";
     let row = sqlx::query(
