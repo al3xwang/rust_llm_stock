@@ -17,10 +17,45 @@ struct Cli {
     /// Minimum total amount traded in the last ~5 days (CN¥). Stocks with less are excluded (default: 0 -> disabled)
     #[clap(long, default_value_t = 0i64)]
     min_5day_amount: i64,
+
+    /// Train cutoff date (inclusive) in YYYYMMDD (default: 20250229)
+    #[clap(long, default_value = "20250229")]
+    train_cutoff: String,
+
+    /// Validation window(s) as START:END in YYYYMMDD format. Repeatable. (default: 20250301:20251103)
+    #[clap(long = "val-window")]
+    val_windows: Vec<String>,
+}
+
+pub fn parse_val_windows(cli_val_windows: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut val_windows_parsed: Vec<(String, String)> = Vec::new();
+    if cli_val_windows.is_empty() {
+        val_windows_parsed.push(("20250301".to_string(), "20251103".to_string()));
+        return Ok(val_windows_parsed);
+    }
+    for vw in cli_val_windows {
+        if !vw.contains(':') {
+            return Err(format!("Invalid --val-window '{}', expected START:END", vw));
+        }
+        let parts: Vec<&str> = vw.splitn(2, ':').collect();
+        let start = parts[0].to_string();
+        let end = parts[1].to_string();
+        if start > end {
+            return Err(format!("Invalid val-window {}: start > end", vw));
+        }
+        val_windows_parsed.push((start, end));
+    }
+    val_windows_parsed.sort_by(|a, b| a.0.cmp(&b.0));
+    for i in 1..val_windows_parsed.len() {
+        if val_windows_parsed[i].0 <= val_windows_parsed[i - 1].1 {
+            return Err(format!("Validation windows overlap or are contiguous: {} <= {}", val_windows_parsed[i].0, val_windows_parsed[i - 1].1));
+        }
+    }
+    Ok(val_windows_parsed)
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {"
     let cli = Cli::parse();
 
     // Load DB URL from env or use default
@@ -298,6 +333,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("  Prefix {}: {} stocks", p, cnt);
     }
 
+    let train_cutoff = cli.train_cutoff.clone();
+    let val_windows_parsed = match parse_val_windows(&cli.val_windows) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("{}", e); return Ok(()); }
+    };"
+
+    println!("Using train_cutoff={} and {} validation window(s)", train_cutoff, val_windows_parsed.len());
+    for (i, (s, e)) in val_windows_parsed.iter().enumerate() {
+        println!("  val_{}: {} -> {}", i + 1, s, e);
+    }
+
     // Get column names (normalize by trimming whitespace)
     let columns = rows[0].columns();
     let all_colnames: Vec<String> = columns
@@ -354,12 +400,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for f in &feature_cols {
         for &t in &target_cols {
             if f.eq_ignore_ascii_case(t) {
-                panic!("Feature column '{}' matches target column '{}' — aborting export", f, t);
+                panic!("Feature column '{}' matches target column '{}' - aborting export", f, t);
             }
         }
     }
 
-    // Skipping full training_data.csv export — this file is not used for model training.
+    // Skipping full training_data.csv export - this file is not used for model training.
     println!("Skipping export of training_data.csv (disabled)");
 
     println!("CSV columns: {}", csv_cols.len());
@@ -375,8 +421,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // For each stock, take the most recent 5 years of data and split into: 3.5y train | 1y val | 0.5y test.
     // For stocks with less than 5 years, split available days proportionally (70% train, 20% val, 10% test).
     let mut train_rows = Vec::new();
-    let mut val_rows = Vec::new();
+    let mut val_rows_per_window: Vec<Vec<&sqlx::postgres::PgRow>> = vec![Vec::new(); val_windows_parsed.len()];
     let mut test_rows = Vec::new();
+
+    // Audit map: ts_code -> [train, val_1, ..., val_N, test, dropped]
+    let mut audit_map: HashMap<String, Vec<usize>> = HashMap::new();
     // Trading days approximated as 240 per year
     let trading_days_year = 240usize;
     let train_days = (3.5_f32 * trading_days_year as f32).round() as usize; // 3.5 years
@@ -388,7 +437,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut skipped_by_min_years = 0usize;
     // Diagnostics for date-based splits: how many stocks lack rows in each split
     let mut missing_train = 0usize;
-    let mut missing_val = 0usize;
+    // per-validation-window missing counts
+    let mut missing_val_per_window: Vec<usize> = vec![0; val_windows_parsed.len()];
     let mut missing_test = 0usize;
     // min_years from CLI: convert to a minimum required trading days threshold when > 0
     let min_required_days = if cli.min_years > 0 {
@@ -410,40 +460,52 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        // Split by fixed date cutoffs (preferred):
-        // Train: trade_date <= 20250229
-        // Val:   20250301 <= trade_date <= 20251103
-        // Test:  trade_date >= 20251104
+        // Multi-window splitting by dates:
+        // Train: date <= train_cutoff
+        // Validation: any of the val_windows_parsed (val_1, val_2, ...)
+        // Test: date > last_val_end
         let model_data = &sorted[..];
+        // Prepare per-window buckets
         let mut train_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
-        let mut val_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
+        let mut val_parts: Vec<Vec<&sqlx::postgres::PgRow>> = vec![Vec::new(); val_windows_parsed.len()];
         let mut test_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
-        let train_cutoff = "20250229";
-        let val_cutoff = "20251103";
+        let mut dropped_in_gaps = 0usize;
+        let last_val_end = if !val_windows_parsed.is_empty() { val_windows_parsed.last().unwrap().1.clone() } else { train_cutoff.clone() };
+
+        // per-stock audit counters: train + N vals + test + dropped
+        let mut counts: Vec<usize> = vec![0; 1 + val_windows_parsed.len() + 2];
+        // indices: 0=train, 1..=N val_i, N+1=test, N+2=dropped
+
         for row in model_data.iter() {
             let d: String = row.try_get("trade_date").unwrap_or_default();
-            if d.as_str() <= train_cutoff {
+            if d.as_str() <= train_cutoff.as_str() {
                 train_part.push(row);
-            } else if d.as_str() <= val_cutoff {
-                val_part.push(row);
-            } else {
+                counts[0] += 1;
+                continue;
+            }
+            let mut assigned = false;
+            for (i, (s, e)) in val_windows_parsed.iter().enumerate() {
+                if d.as_str() >= s.as_str() && d.as_str() <= e.as_str() {
+                    val_parts[i].push(row);
+                    counts[1 + i] += 1;
+                    assigned = true;
+                    break;
+                }
+            }
+            if assigned { continue; }
+            if d.as_str() > last_val_end.as_str() {
                 test_part.push(row);
+                counts[1 + val_windows_parsed.len()] += 1;
+            } else {
+                // Gap: between train_cutoff and last_val_end but not in any val window -> drop and count
+                dropped_in_gaps += 1;
+                counts[1 + val_windows_parsed.len() + 1] += 1;
             }
         }
 
-        // Track missing bins for diagnostics
-        if train_part.is_empty() {
-            missing_train += 1;
-        }
-        if val_part.is_empty() {
-            missing_val += 1;
-        }
-        if test_part.is_empty() {
-            missing_test += 1;
-        }
-
-        // If no rows fall into any of the bins (very sparse history), fall back to proportional split
-        if train_part.is_empty() && val_part.is_empty() && test_part.is_empty() {
+        // Fallback proportional split if nothing placed into any bin (very sparse history)
+        let placed = train_part.len() + test_part.len() + val_parts.iter().map(|v| v.len()).sum::<usize>();
+        if placed == 0 {
             let n = model_data.len();
             if n < 3 {
                 train_rows.extend_from_slice(model_data);
@@ -455,38 +517,61 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let train_size = n.saturating_sub(val_size + test_size);
             if train_size > 0 {
                 train_rows.extend_from_slice(&model_data[..train_size]);
+                counts[0] += train_size;
             }
             if val_size > 0 {
-                val_rows.extend_from_slice(&model_data[train_size..train_size + val_size]);
+                // put into first val window fallback
+                val_rows_per_window[0].extend_from_slice(&model_data[train_size..train_size + val_size]);
+                counts[1] += val_size;
             }
             if test_size > 0 {
                 test_rows.extend_from_slice(&model_data[train_size + val_size..]);
+                counts[1 + val_windows_parsed.len()] += test_size;
             }
             partial_coverage_stocks += 1;
+            audit_map.insert(ts_code.clone(), counts);
             continue;
+        }
+
+        // Track missing bins for diagnostics per-window
+        if train_part.is_empty() {
+            missing_train += 1;
+        }
+        for (i, vp) in val_parts.iter().enumerate() {
+            if vp.is_empty() {
+                missing_val_per_window[i] += 1;
+            }
+        }
+        if test_part.is_empty() {
+            missing_test += 1;
         }
 
         // Use date-split parts
         if !train_part.is_empty() {
             train_rows.extend_from_slice(&train_part);
         }
-        if !val_part.is_empty() {
-            val_rows.extend_from_slice(&val_part);
+        for (i, vp) in val_parts.into_iter().enumerate() {
+            if !vp.is_empty() {
+                val_rows_per_window[i].extend_from_slice(&vp);
+            }
         }
         if !test_part.is_empty() {
             test_rows.extend_from_slice(&test_part);
         }
 
+        // Save per-stock audit counts
+        audit_map.insert(ts_code.clone(), counts);
+
         // Track coverage: if a stock has at least required_per_stock days across the window, consider full_coverage
-        if total >= required_per_stock {
+        if placed >= required_per_stock {
             full_coverage_stocks += 1;
         } else {
             partial_coverage_stocks += 1;
         }
     }
 
-    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, splitting mode: fixed-date cutoffs (train<=20250229, val<=20251103, test>20251103)", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years);
-    println!("Stocks missing bins by date-split: missing_train: {}, missing_val: {}, missing_test: {}", missing_train, missing_val, missing_test);
+    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, train_cutoff: {}, validation windows: {}", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years, train_cutoff, val_windows_parsed.len());
+    println!("Stocks missing bins by date-split: missing_train: {}, missing_test: {}, missing_val_per_window: {:?}", missing_train, missing_test, missing_val_per_window);
     if partial_coverage_stocks > 0 {
         println!("Note: {} stocks required proportional fallback splits. Per-stock target days (fallback): {} (train {} val {} test {})", partial_coverage_stocks, required_per_stock, train_days, val_days, test_days);
     }
@@ -526,14 +611,93 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         };
     write_csv("train.csv", &train_rows)?;
-    write_csv("val.csv", &val_rows)?;
+    for (i, rows) in val_rows_per_window.iter().enumerate() {
+        write_csv(&format!("val_{}.csv", i + 1), rows)?;
+    }
     write_csv("test.csv", &test_rows)?;
-    println!(
-        "Exported train.csv: {} rows, val.csv: {}, test.csv: {}",
-        train_rows.len(),
-        val_rows.len(),
-        test_rows.len()
-    );
+
+    // Print counts
+    let val_counts: Vec<usize> = val_rows_per_window.iter().map(|v| v.len()).collect();
+    println!("Exported train.csv: {} rows", train_rows.len());
+    for (i, cnt) in val_counts.iter().enumerate() {
+        println!("  val_{}.csv: {} rows", i + 1, cnt);
+    }
+    println!("Exported test.csv: {} rows", test_rows.len());
+
+    // Write audit CSV: ts_code, train, val_1..val_N, test, dropped, total
+    let mut audit_file = File::create("export_audit.csv")?;
+    let mut audit_writer = BufWriter::new(&mut audit_file);
+    let mut audit_header = vec!["ts_code".to_string(), "train".to_string()];
+    for i in 0..val_windows_parsed.len() {
+        audit_header.push(format!("val_{}", i + 1));
+    }
+    audit_header.push("test".to_string());
+    audit_header.push("dropped".to_string());
+    audit_header.push("total".to_string());
+    writeln!(audit_writer, "{}", audit_header.join(","))?;
+    for (ts, counts) in &audit_map {
+        let mut row = Vec::new();
+        row.push(ts.clone());
+        // counts length: 1 + N + 2
+        let train_cnt = counts.get(0).cloned().unwrap_or(0);
+        row.push(train_cnt.to_string());
+        for i in 0..val_windows_parsed.len() {
+            let v = counts.get(1 + i).cloned().unwrap_or(0);
+            row.push(v.to_string());
+        }
+        let test_cnt = counts.get(1 + val_windows_parsed.len()).cloned().unwrap_or(0);
+        let dropped_cnt = counts.get(1 + val_windows_parsed.len() + 1).cloned().unwrap_or(0);
+        row.push(test_cnt.to_string());
+        row.push(dropped_cnt.to_string());
+        let total_cnt: usize = counts.iter().sum();
+        row.push(total_cnt.to_string());
+        writeln!(audit_writer, "{}", row.join(","))?;
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_empty_default() {
+        let v = parse_val_windows(&vec![]).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0], ("20250301".to_string(), "20251103".to_string()));
+    }
+
+    #[test]
+    fn parse_two_windows_sorted() {
+        let input = vec!["20250701:20251103".to_string(), "20250301:20250630".to_string()];
+        let v = parse_val_windows(&input).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].0, "20250301");
+        assert_eq!(v[1].0, "20250701");
+    }
+
+    #[test]
+    fn parse_invalid_format() {
+        let input = vec!["2025030120251103".to_string()];
+        assert!(parse_val_windows(&input).is_err());
+    }
+
+    #[test]
+    fn parse_start_after_end() {
+        let input = vec!["20250301:20250228".to_string()];
+        assert!(parse_val_windows(&input).is_err());
+    }
+
+    #[test]
+    fn parse_overlapping() {
+        let input = vec!["20250301:20250630".to_string(), "20250615:20251103".to_string()];
+        assert!(parse_val_windows(&input).is_err());
+    }
+
+    #[test]
+    fn parse_contiguous() {
+        let input = vec!["20250301:20250630".to_string(), "20250630:20251103".to_string()];
+        assert!(parse_val_windows(&input).is_err());
+    }
 }
