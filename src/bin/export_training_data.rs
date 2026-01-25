@@ -27,6 +27,10 @@ struct Cli {
     /// Export mode: "full" for complete dataset, "sliding" for sliding window compatible (default: full)
     #[clap(long, default_value = "full")]
     mode: String,
+
+    /// Cutoff date for test set in YYYYMMDD format (default: 20251231). Rows after this date are considered test.
+    #[clap(long, default_value = "20251231")]
+    test_cutoff: String,
 }
 
 #[tokio::main]
@@ -58,6 +62,69 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         "".to_string()
     };
+
+    // Quick diagnostics: total rows in ml_training_dataset after test_cutoff and rows for the selected stock set
+    let test_cutoff = cli.test_cutoff.clone();
+
+    let total_after_testcutoff: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM ml_training_dataset WHERE trade_date > '{test_cutoff}' AND trade_date <= '{end_date}'",
+        test_cutoff = test_cutoff,
+        end_date = end_date
+    ))
+    .fetch_one(&pool)
+    .await?;
+    println!("Total ml_training_dataset rows with trade_date in ({}, {}]: {}", test_cutoff, end_date, total_after_testcutoff);
+
+    let sel_after_testcutoff: i64 = sqlx::query_scalar(&format!(
+        r#"
+        WITH eligible AS (
+            SELECT s.ts_code
+            FROM stock_basic s
+            JOIN LATERAL (
+                SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
+            ) lc ON lc.close >= 2.0
+            WHERE s.list_date <= '{start_date}'
+              AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+              {min_years_cond}
+              AND EXISTS (
+                SELECT 1 FROM ml_training_dataset d WHERE d.ts_code = s.ts_code AND d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
+              )
+        ),
+        recent_liq AS (
+            SELECT a.ts_code, AVG(a.amount)::float8 AS avg_amount_3m
+            FROM adjusted_stock_daily a
+            WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '3 months'), 'YYYYMMDD')
+            GROUP BY a.ts_code
+        ),
+        liq_rank AS (
+            SELECT r.ts_code, NTILE(100) OVER (ORDER BY COALESCE(r.avg_amount_3m, 0.0) DESC) AS pct_rank
+            FROM recent_liq r JOIN eligible e ON e.ts_code = r.ts_code
+        ),
+        selected_stocks AS (
+            SELECT r.ts_code FROM liq_rank r WHERE pct_rank <= 30
+            UNION
+            SELECT ts_code FROM (
+                SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                FROM eligible WHERE ts_code LIKE '60%'
+            ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '60%') / 2.0)
+            UNION
+            SELECT ts_code FROM (
+                SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                FROM eligible WHERE ts_code LIKE '00%'
+            ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '00%') / 2.0)
+            UNION
+            SELECT ts_code FROM eligible WHERE ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
+        )
+        SELECT COUNT(*) FROM ml_training_dataset d JOIN selected_stocks s ON d.ts_code = s.ts_code WHERE d.trade_date > '{test_cutoff}' AND d.trade_date <= '{end_date}'
+    "#,
+        start_date = start_date,
+        end_date = end_date,
+        min_years_cond = min_years_cond,
+        test_cutoff = test_cutoff
+    ))
+    .fetch_one(&pool)
+    .await?;
+    println!("Rows in selected set with trade_date in ({}, {}]: {}", test_cutoff, end_date, sel_after_testcutoff);
 
     let rows = if min_5day_amount > 0 {
         sqlx::query(&format!(
@@ -394,44 +461,98 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Skipping full training_data.csv export - this file is not used for model training.
 
-    // For sliding window mode, export all data without splitting
-    println!("Exporting all data to training_data.csv (sliding window mode)");
-    let mut wtr = csv::Writer::from_path("training_data.csv")?;
-    wtr.write_record(&csv_cols)?;
 
-    for row in &rows {
-        let mut record = Vec::new();
-        for col in &csv_cols {
-            let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
-                Ok(Some(v)) => v.to_string(),
-                Ok(None) => "".to_string(),
-                Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
-                    Ok(Some(s)) => s,
+    if cli.mode == "sliding" {
+        // Sliding window mode: export all data without splitting
+        println!("Exporting all data to training_data.csv (sliding window mode)");
+        let mut wtr = csv::Writer::from_path("training_data.csv")?;
+        wtr.write_record(&csv_cols)?;
+
+        for row in &rows {
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
                     Ok(None) => "".to_string(),
-                    Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
-                        Ok(Some(i)) => i.to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
                         Ok(None) => "".to_string(),
-                        Err(_) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
                     },
-                },
-            };
-            record.push(val);
+                };
+                record.push(val);
+            }
+            wtr.write_record(&record)?;
         }
-        wtr.write_record(&record)?;
+
+        wtr.flush()?;
+        println!("Exported {} rows to training_data.csv", rows.len());
+    } else {
+        // Full mode: exclude test period rows from training export
+        println!("Exporting training data to training_data.csv (excluding trade_date > {})", test_cutoff);
+        let mut wtr = csv::Writer::from_path("training_data.csv")?;
+        wtr.write_record(&csv_cols)?;
+
+        let mut n_written: usize = 0;
+        let mut n_excluded: usize = 0;
+        for row in &rows {
+            let trade_date: String = row.try_get("trade_date").unwrap_or_default();
+            if trade_date.as_str() > test_cutoff.as_str() {
+                n_excluded += 1;
+                continue;
+            }
+
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
+                    Ok(None) => "".to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
+                    },
+                };
+                record.push(val);
+            }
+            wtr.write_record(&record)?;
+            n_written += 1;
+        }
+
+        wtr.flush()?;
+        println!("Exported {} rows to training_data.csv (excluded {} rows with trade_date > {})", n_written, n_excluded, test_cutoff);
     }
 
-    wtr.flush()?;
-    println!("Exported {} rows to training_data.csv", rows.len());
+    // Diagnostics for test split
+    let test_rows_count = rows.iter().filter(|r| {
+        let trade_date: String = r.try_get("trade_date").unwrap_or_default();
+        trade_date.as_str() > test_cutoff.as_str()
+    }).count();
+    let test_rows_in_sel = rows.iter().filter(|r| {
+        let trade_date: String = r.try_get("trade_date").unwrap_or_default();
+        let ts_code: String = r.try_get("ts_code").unwrap_or_default();
+        sel_set.contains(&ts_code) && trade_date.as_str() > test_cutoff.as_str()
+    }).count();
+    println!("Rows with trade_date > {}: {}", test_cutoff, test_rows_count);
+    println!("Rows with trade_date > {} and in selected set: {}", test_cutoff, test_rows_in_sel);
 
-    // Export test data set after 20251231 into a separate CSV file based on selected stocks
-    println!("Exporting test data set to test_data.csv (data after 20251231, strictly based on selected stocks)");
+    // Export test data set after test_cutoff into a separate CSV file based on selected stocks
+    println!("Exporting test data set to test_data.csv (data after {}, strictly based on selected stocks)", test_cutoff);
     let mut test_wtr = csv::Writer::from_path("test_data.csv")?;
     test_wtr.write_record(&csv_cols)?;
 
     for row in &rows {
         let trade_date: String = row.try_get("trade_date").unwrap_or_default();
         let ts_code: String = row.try_get("ts_code").unwrap_or_default();
-        if sel_set.contains(&ts_code) && trade_date > String::from("20251231") {
+        if sel_set.contains(&ts_code) && trade_date.as_str() > test_cutoff.as_str() {
             let mut record = Vec::new();
             for col in &csv_cols {
                 let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
