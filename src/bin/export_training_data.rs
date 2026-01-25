@@ -423,5 +423,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
     wtr.flush()?;
     println!("Exported {} rows to training_data.csv", rows.len());
 
+    // Export test data set after 20251231 into a separate CSV file based on selected stocks
+    println!("Exporting test data set to test_data.csv (data after 20251231, based on selected stocks)");
+    let mut test_wtr = csv::Writer::from_path("test_data.csv")?;
+    test_wtr.write_record(&csv_cols)?;
+
+    for row in &rows {
+        let trade_date: String = row.try_get("trade_date").unwrap_or_default();
+        let ts_code: String = row.try_get("ts_code").unwrap_or_default();
+        if trade_date > String::from("20251231") && sel_set.contains(&ts_code) {
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
+                    Ok(None) => "".to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
+                    },
+                };
+                record.push(val);
+            }
+            test_wtr.write_record(&record)?;
+        }
+    }
+
+    test_wtr.flush()?;
+    println!("Exported test data set to test_data.csv");
+
     Ok(())
 }
