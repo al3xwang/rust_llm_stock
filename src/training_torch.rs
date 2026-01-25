@@ -32,6 +32,7 @@ pub fn train_with_torch(
     max_epochs_override: Option<usize>,
     early_stop_override: Option<usize>,
     direction_weight: Option<f64>,
+    resume_from: Option<String>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
@@ -86,6 +87,13 @@ pub fn train_with_torch(
     }
     let model = TorchStockModel::new(&vs.root(), &config);
 
+    // Load checkpoint if resuming
+    if let Some(ref checkpoint_path) = resume_from {
+        println!("Loading checkpoint from: {}", checkpoint_path);
+        vs.load(checkpoint_path)?;
+        println!("✓ Successfully loaded checkpoint");
+    }
+
     // Optimizer
     let mut opt = nn::Adam::default().build(&vs, learning_rate)?;
 
@@ -95,6 +103,11 @@ pub fn train_with_torch(
     fs::create_dir_all(&artifact_dir)?;
 
     println!("\n=== Training Configuration ===");
+    if let Some(ref checkpoint_path) = resume_from {
+        println!("Resuming from checkpoint: {}", checkpoint_path);
+    } else {
+        println!("Starting fresh training");
+    }
     println!("Device: {:?}", device);
     println!("Sequence length: {}", seq_len);
     println!("Batch size: {}", batch_size);

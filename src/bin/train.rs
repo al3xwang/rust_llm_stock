@@ -98,6 +98,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sample_weight_decay: f64 = 0.0;
     let mut sample_weight_normalize: Option<String> = None;
 
+    // Resume training from checkpoint
+    let mut resume_from: Option<String> = None;
+
     while i < args.len() {
         match args[i].as_str() {
             "--out" => {
@@ -229,6 +232,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            "--resume-from" => {
+                if i + 1 < args.len() {
+                    resume_from = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -265,6 +274,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         max_epochs_override,
         early_stop_override,
         dir_weight,
+        resume_from,
     )?;
     Ok(())
 }
