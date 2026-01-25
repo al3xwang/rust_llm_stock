@@ -424,14 +424,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Exported {} rows to training_data.csv", rows.len());
 
     // Export test data set after 20251231 into a separate CSV file based on selected stocks
-    println!("Exporting test data set to test_data.csv (data after 20251231, based on selected stocks)");
+    println!("Exporting test data set to test_data.csv (data after 20251231, strictly based on selected stocks)");
     let mut test_wtr = csv::Writer::from_path("test_data.csv")?;
     test_wtr.write_record(&csv_cols)?;
 
     for row in &rows {
         let trade_date: String = row.try_get("trade_date").unwrap_or_default();
         let ts_code: String = row.try_get("ts_code").unwrap_or_default();
-        if trade_date > String::from("20251231") && sel_set.contains(&ts_code) {
+        if sel_set.contains(&ts_code) && trade_date > String::from("20251231") {
             let mut record = Vec::new();
             for col in &csv_cols {
                 let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
