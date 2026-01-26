@@ -38,13 +38,16 @@ def main():
 
     features = [c for c in train.columns if c not in ['ts_code','trade_date', args.target, 'next_day_direction']]
 
+    # Identify categorical (string/object) columns
+    cat_features = [c for c in features if train[c].dtype == 'object' or str(train[c].dtype).startswith('string')]
+
     X_train = train[features].fillna(0.0)
     y_train = train[args.target].fillna(0.0)
     X_val = val[features].fillna(0.0)
     y_val = val[args.target].fillna(0.0)
 
-    dtrain = lgb.Dataset(X_train, label=y_train)
-    dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
+    dtrain = lgb.Dataset(X_train, label=y_train, categorical_feature=cat_features if cat_features else None)
+    dval = lgb.Dataset(X_val, label=y_val, reference=dtrain, categorical_feature=cat_features if cat_features else None)
 
     params = {
         'objective': 'regression',
