@@ -40,10 +40,29 @@ def main():
 
     # Identify categorical (string/object) columns
     cat_features = [c for c in features if train[c].dtype == 'object' or str(train[c].dtype).startswith('string')]
+    num_features = [c for c in features if c not in cat_features]
 
-    X_train = train[features].fillna(0.0)
+    # Prepare feature DataFrames
+    X_train = train[features].copy()
+    X_val = val[features].copy()
+
+    # Fill numeric features with 0.0
+    if num_features:
+        X_train[num_features] = X_train[num_features].fillna(0.0)
+        X_val[num_features] = X_val[num_features].fillna(0.0)
+
+    # For categorical features, fill missing with a sentinel and convert to category
+    for c in cat_features:
+        X_train[c] = X_train[c].fillna('MISSING').astype('category')
+        X_val[c] = X_val[c].fillna('MISSING').astype('category')
+        # Align categories between train and val
+        cats = pd.Index(X_train[c].cat.categories).union(X_val[c].cat.categories).tolist()
+        if 'MISSING' not in cats:
+            cats = ['MISSING'] + cats
+        X_train[c] = X_train[c].cat.set_categories(cats)
+        X_val[c] = X_val[c].cat.set_categories(cats)
+
     y_train = train[args.target].fillna(0.0)
-    X_val = val[features].fillna(0.0)
     y_val = val[args.target].fillna(0.0)
 
     dtrain = lgb.Dataset(X_train, label=y_train, categorical_feature=cat_features if cat_features else None)
