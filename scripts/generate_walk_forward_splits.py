@@ -9,14 +9,24 @@ ORDER_COLS = ['ts_code', 'trade_date']  # Columns to order by
 TRAIN_YEARS = 2
 TRAIN_MONTHS = 6  # 2.5 years = 2 years + 6 months
 VAL_MONTHS = 6
-STEP_DAYS = 14  # Changed from 7 to 14 days
+STEP_MONTHS = 1  # Slide by 1 month
 DATE_COL = 'trade_date'  # Date column (must be parseable)
+HOLDOUT_DATE = pd.Timestamp('2026-01-01')
 
 # Create output directory
 os.makedirs(OUT_DIR, exist_ok=True)
 
 df = pd.read_csv(DATA_PATH, parse_dates=[DATE_COL])
 df = df.sort_values(ORDER_COLS)
+
+# Generate holdout/test set: all rows after HOLDOUT_DATE
+holdout_df = df[df[DATE_COL] > HOLDOUT_DATE]
+holdout_file = os.path.join(OUT_DIR, f'holdout_test_after_{HOLDOUT_DATE.date()}.csv')
+holdout_df.to_csv(holdout_file, index=False)
+print(f'Holdout test set saved to {holdout_file} with {len(holdout_df)} rows.')
+
+# Remove holdout data from main df for walk-forward splits
+df = df[df[DATE_COL] <= HOLDOUT_DATE]
 
 # Get unique sorted dates
 all_dates = df[DATE_COL].sort_values().unique()
@@ -43,7 +53,7 @@ while True:
 
     # Skip if not enough data
     if train_df.empty or val_df.empty:
-        train_start = train_start + pd.DateOffset(days=STEP_DAYS)
+        train_start = train_start + pd.DateOffset(months=STEP_MONTHS)
         continue
 
     # Save splits
@@ -53,8 +63,8 @@ while True:
     val_df.to_csv(val_file, index=False)
     splits.append((train_file, val_file))
 
-    # Step forward by exactly STEP_DAYS
-    train_start = train_start + pd.DateOffset(days=STEP_DAYS)
+    # Step forward by exactly STEP_MONTHS for both train and val
+    train_start = train_start + pd.DateOffset(months=STEP_MONTHS)
 
 # Write split list for shell script
 with open(os.path.join(OUT_DIR, 'split_list.txt'), 'w') as f:
