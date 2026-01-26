@@ -1,34 +1,4 @@
-#!/bin/bash
-# setup_dev_env.sh: Create Python venv and install dependencies for ensemble pipeline
-# Usage: bash scripts/setup_dev_env.sh [--no-system-deps]
-
-set -e
-
-if [[ "$1" != "--no-system-deps" ]]; then
-  echo "Installing system dependencies (macOS: brew, Ubuntu: apt-get)..."
-  if [[ "$(uname)" == "Darwin" ]]; then
-    brew install libomp || true
-  else
-    sudo apt-get update && sudo apt-get install -y libomp-dev || true
-  fi
-fi
-
-if [[ ! -d ".venv" ]]; then
-  echo "Creating Python virtual environment..."
-  python3 -m venv .venv
-fi
-
-source .venv/bin/activate
-
-python3 -m pip install --upgrade pip
-if [[ -f "tests/requirements.txt" ]]; then
-  pip install -r tests/requirements.txt
-else
-  echo "Warning: tests/requirements.txt not found. Installing core packages."
-  pip install torch lightgbm joblib pandas numpy scikit-learn
-fi
-
-echo "Environment setup complete."#!/usr/bin/env bash
+#!/usr/bin/env bash
 # scripts/setup_dev_env.sh
 # Create a Python virtual environment and install test/dev dependencies.
 # Usage: ./scripts/setup_dev_env.sh [--venv-dir .venv] [--no-system-deps]

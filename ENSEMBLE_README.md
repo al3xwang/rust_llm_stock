@@ -22,6 +22,36 @@ GPU tips & throughput: ✅
 - Increase `--batch` as GPU memory allows to improve throughput; prefer power-of-two batch sizes.
 - Use `--lr-scheduler cosine` for stable long runs and `--resume` with `--checkpoint` to continue interrupted training.
 
+Developer setup (server/CI) 🛠️
+- Create and activate a Python virtual environment, then install deps:
+
+  ```bash
+  python3 -m venv .venv && source .venv/bin/activate
+  python -m pip install --upgrade pip
+  python -m pip install -r tests/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+  ```
+
+- System packages: On Ubuntu install OpenMP for LightGBM:
+  `sudo apt-get update && sudo apt-get install -y libomp-dev`
+  On macOS: `brew install libomp`.
+
+- If you encounter errors with compiled extensions and NumPy 2.x, pin to NumPy 1.x:
+  `python -m pip install 'numpy<2' --force-reinstall`
+
+- Quick helper: `scripts/setup_dev_env.sh` automates venv + installs and checks compatibility.
+
+Quick one-liner to pull latest changes and set up the dev environment (safe default):
+
+```bash
+git pull origin main && ./scripts/setup_dev_env.sh
+```
+
+If you'd rather avoid system package installation on the server, run the one-liner with `--no-system-deps`:
+
+```bash
+git pull origin main && ./scripts/setup_dev_env.sh --no-system-deps
+```
+
 If you'd like, I can:
 - Add a small Rust/Python tool to run the transformer checkpoint and write per-sample predictions to CSV automatically (recommended), or
 - Change the transformer to be trained in Python so the entire stack is Pythonic.

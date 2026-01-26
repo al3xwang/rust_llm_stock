@@ -7,6 +7,24 @@ Exits non-zero on failure.
 import subprocess
 import sys
 from pathlib import Path
+
+# Preflight: check for required Python packages and provide install guidance
+_missing_pkgs = []
+for _mod in ('joblib','pandas','numpy','sklearn','lightgbm','torch'):
+    try:
+        __import__(_mod)
+    except Exception:
+        _missing_pkgs.append(_mod)
+if _missing_pkgs:
+    print('Missing Python packages:', ', '.join(_missing_pkgs))
+    print('Install them with:')
+    print('  python3 -m pip install -r tests/requirements.txt')
+    print('\nOn Ubuntu you may also need: sudo apt-get install -y libomp-dev')
+    print('On macOS you may also need: brew install libomp')
+    print('\nIf using NumPy 2.x and you get import errors with compiled modules, install numpy<2:')
+    print("  python3 -m pip install 'numpy<2'")
+    sys.exit(1)
+
 import pandas as pd
 import numpy as np
 
