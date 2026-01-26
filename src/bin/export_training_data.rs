@@ -1,10 +1,8 @@
 // Export ML training data from ml_training_dataset to CSV, omitting target columns from features.
 // Only use Option<f64> safe arithmetic and handle missing data gracefully.
 
-use sqlx::{Column, Row, ValueRef, postgres::PgPoolOptions};
+use sqlx::{Column, Row, postgres::PgPoolOptions};
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -18,40 +16,21 @@ struct Cli {
     #[clap(long, default_value_t = 0i64)]
     min_5day_amount: i64,
 
-    /// Train cutoff date (inclusive) in YYYYMMDD (default: 20250229)
-    #[clap(long, default_value = "20250229")]
-    train_cutoff: String,
+    /// Start date for data export in YYYYMMDD format (default: 20220701)
+    #[clap(long, default_value = "20220701")]
+    start_date: String,
 
-    /// Validation window(s) as START:END in YYYYMMDD format. Repeatable. (default: 20250301:20251103)
-    #[clap(long = "val-window")]
-    val_windows: Vec<String>,
-}
+    /// End date for data export in YYYYMMDD format (default: current date)
+    #[clap(long)]
+    end_date: Option<String>,
 
-pub fn parse_val_windows(cli_val_windows: &[String]) -> Result<Vec<(String, String)>, String> {
-    let mut val_windows_parsed: Vec<(String, String)> = Vec::new();
-    if cli_val_windows.is_empty() {
-        val_windows_parsed.push(("20250301".to_string(), "20251103".to_string()));
-        return Ok(val_windows_parsed);
-    }
-    for vw in cli_val_windows {
-        if !vw.contains(':') {
-            return Err(format!("Invalid --val-window '{}', expected START:END", vw));
-        }
-        let parts: Vec<&str> = vw.splitn(2, ':').collect();
-        let start = parts[0].to_string();
-        let end = parts[1].to_string();
-        if start > end {
-            return Err(format!("Invalid val-window {}: start > end", vw));
-        }
-        val_windows_parsed.push((start, end));
-    }
-    val_windows_parsed.sort_by(|a, b| a.0.cmp(&b.0));
-    for i in 1..val_windows_parsed.len() {
-        if val_windows_parsed[i].0 <= val_windows_parsed[i - 1].1 {
-            return Err(format!("Validation windows overlap or are contiguous: {} <= {}", val_windows_parsed[i].0, val_windows_parsed[i - 1].1));
-        }
-    }
-    Ok(val_windows_parsed)
+    /// Export mode: "full" for complete dataset, "sliding" for sliding window compatible (default: full)
+    #[clap(long, default_value = "full")]
+    mode: String,
+
+    /// Cutoff date for test set in YYYYMMDD format (default: 20251231). Rows after this date are considered test.
+    #[clap(long, default_value = "20251231")]
+    test_cutoff: String,
 }
 
 #[tokio::main]
@@ -66,21 +45,92 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&db_url)
         .await?;
 
-    // Query: select stocks with data covering the most recent 5 years (we will export latest 5 years per stock)
-    // Selection refinement: compute average traded amount over the last 3 months and select the top 30% by liquidity.
-    // Always include stocks whose code starts with the desired prefixes regardless of liquidity (to ensure coverage).
-    // Build the SQL selection; if a minimum 5-day amount threshold is configured, apply it in the selection
+    // Determine date range
+    let start_date = cli.start_date.clone();
+    let end_date = cli.end_date.unwrap_or_else(|| {
+        // Default to current date
+        chrono::Utc::now().format("%Y%m%d").to_string()
+    });
+
+    println!("Exporting data from {} to {} in {} mode", start_date, end_date, cli.mode);
+
+    // Build the SQL selection based on date range
     let min_5day_amount = cli.min_5day_amount;
     let min_years_cond = if cli.min_years > 0 {
-        format!("AND EXISTS (SELECT 1 FROM ml_training_dataset d WHERE d.ts_code = s.ts_code AND d.trade_date <= TO_CHAR((CURRENT_DATE - INTERVAL '{} years'), 'YYYYMMDD'))", cli.min_years)
+        // Ensure the stock was listed at least `min_years` before the requested start date
+        format!("AND s.list_date <= TO_CHAR((TO_DATE('{}','YYYYMMDD') - INTERVAL '{} years'), 'YYYYMMDD')", start_date, cli.min_years)
     } else {
         "".to_string()
     };
+
+    // Quick diagnostics: total rows in ml_training_dataset after test_cutoff and rows for the selected stock set
+    let test_cutoff = cli.test_cutoff.clone();
+
+    let total_after_testcutoff: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM ml_training_dataset WHERE trade_date > '{test_cutoff}' AND trade_date <= '{end_date}'",
+        test_cutoff = test_cutoff,
+        end_date = end_date
+    ))
+    .fetch_one(&pool)
+    .await?;
+    println!("Total ml_training_dataset rows with trade_date in ({}, {}]: {}", test_cutoff, end_date, total_after_testcutoff);
+
+    let sel_after_testcutoff: i64 = sqlx::query_scalar(&format!(
+        r#"
+        WITH eligible AS (
+            SELECT s.ts_code
+            FROM stock_basic s
+            JOIN LATERAL (
+                SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
+            ) lc ON lc.close >= 2.0
+            WHERE s.list_date <= '{start_date}'
+              AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+              {min_years_cond}
+              AND EXISTS (
+                SELECT 1 FROM ml_training_dataset d WHERE d.ts_code = s.ts_code AND d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
+              )
+        ),
+        recent_liq AS (
+            SELECT a.ts_code, AVG(a.amount)::float8 AS avg_amount_3m
+            FROM adjusted_stock_daily a
+            WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '3 months'), 'YYYYMMDD')
+            GROUP BY a.ts_code
+        ),
+        liq_rank AS (
+            SELECT r.ts_code, NTILE(100) OVER (ORDER BY COALESCE(r.avg_amount_3m, 0.0) DESC) AS pct_rank
+            FROM recent_liq r JOIN eligible e ON e.ts_code = r.ts_code
+        ),
+        selected_stocks AS (
+            SELECT r.ts_code FROM liq_rank r WHERE pct_rank <= 30
+            UNION
+            SELECT ts_code FROM (
+                SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                FROM eligible WHERE ts_code LIKE '60%'
+            ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '60%') / 2.0)
+            UNION
+            SELECT ts_code FROM (
+                SELECT ts_code, ROW_NUMBER() OVER (ORDER BY random()) AS rn
+                FROM eligible WHERE ts_code LIKE '00%'
+            ) t WHERE rn <= CEIL((SELECT COUNT(*)::float FROM eligible WHERE ts_code LIKE '00%') / 2.0)
+            UNION
+            SELECT ts_code FROM eligible WHERE ts_code LIKE '30%' OR ts_code LIKE '68%' OR ts_code LIKE '9%'
+        )
+        SELECT COUNT(*) FROM ml_training_dataset d JOIN selected_stocks s ON d.ts_code = s.ts_code WHERE d.trade_date > '{test_cutoff}' AND d.trade_date <= '{end_date}'
+    "#,
+        start_date = start_date,
+        end_date = end_date,
+        min_years_cond = min_years_cond,
+        test_cutoff = test_cutoff
+    ))
+    .fetch_one(&pool)
+    .await?;
+    println!("Rows in selected set with trade_date in ({}, {}]: {}", test_cutoff, end_date, sel_after_testcutoff);
+
     let rows = if min_5day_amount > 0 {
         sqlx::query(&format!(
             r#"
                 WITH eligible AS (
-                    -- Stocks with sufficient listing history and presence in ml_training_dataset
+                    -- Stocks with data in the specified date range
                     -- Exclude names starting with ST or *ST and stocks whose latest close < 2 CNY
                     SELECT s.ts_code
                     FROM stock_basic s
@@ -91,13 +141,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         ORDER BY a.trade_date DESC
                         LIMIT 1
                     ) lc ON lc.close >= 2.0
-                    WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
-                      AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
+                    WHERE NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
                       {min_years_cond}
                       AND EXISTS (
                         SELECT 1 FROM ml_training_dataset d
                         WHERE d.ts_code = s.ts_code
-                          AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                          AND d.trade_date >= '{start_date}'
+                          AND d.trade_date <= '{end_date}'
                       )
                 ),
                 recent_liq AS (
@@ -110,11 +160,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     GROUP BY a.ts_code
                 ),
                 last_5d AS (
-                    -- Sum traded amount over the last ~5 trading days (approx using 7 calendar days window)
+                    -- Sum traded amount over the last ~5 trading days (approx using 7 calendar days window ending at end_date)
                     SELECT a.ts_code,
                            COALESCE(SUM(a.amount), 0.0)::float8 AS amount_5d
                     FROM adjusted_stock_daily a
-                    WHERE a.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '7 days'), 'YYYYMMDD')
+                    WHERE a.trade_date >= TO_CHAR((TO_DATE('{end_date}','YYYYMMDD') - INTERVAL '7 days'), 'YYYYMMDD')
                     GROUP BY a.ts_code
                 ),
                 liq_rank AS (
@@ -143,10 +193,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SELECT d.*
                 FROM ml_training_dataset d
                 JOIN selected_stocks s ON d.ts_code = s.ts_code
-                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                WHERE d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
                 ORDER BY d.ts_code, d.trade_date
         "#,
             min_amt = min_5day_amount,
+            start_date = start_date,
+            end_date = end_date,
             min_years_cond = min_years_cond
         ))
         .fetch_all(&pool)
@@ -166,13 +218,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         ORDER BY a.trade_date DESC
                         LIMIT 1
                     ) lc ON lc.close >= 2.0
-                    WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                    WHERE s.list_date <= '{start_date}'
                       AND NOT (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
                       {min_years_cond}
                       AND EXISTS (
                         SELECT 1 FROM ml_training_dataset d
                         WHERE d.ts_code = s.ts_code
-                          AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                          AND d.trade_date >= '{start_date}'
+                          AND d.trade_date <= '{end_date}'
                       )
                 ),
                 recent_liq AS (
@@ -210,9 +263,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 SELECT d.*
                 FROM ml_training_dataset d
                 JOIN selected_stocks s ON d.ts_code = s.ts_code
-                WHERE d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+                WHERE d.trade_date >= '{start_date}' AND d.trade_date <= '{end_date}'
                 ORDER BY d.ts_code, d.trade_date
-        "#, min_years_cond = min_years_cond))
+        "#, start_date = start_date, end_date = end_date, min_years_cond = min_years_cond))
         .fetch_all(&pool)
         .await?
     };
@@ -225,56 +278,65 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Diagnostics: counts of candidate stocks and exclusions by price/name
     // Base candidate universe: stocks listed long enough and with ml_training_dataset rows in last 5 years
-    let total_candidates: i64 = sqlx::query_scalar(
+    let total_candidates: i64 = sqlx::query_scalar(&format!(
         r#"
         SELECT COUNT(DISTINCT s.ts_code)
         FROM stock_basic s
-        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+        WHERE s.list_date <= '{start_date}'
           AND EXISTS (
             SELECT 1 FROM ml_training_dataset d
             WHERE d.ts_code = s.ts_code
-              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+              AND d.trade_date >= '{start_date}'
+              AND d.trade_date <= '{end_date}'
           )
         "#,
-    )
+        start_date = start_date,
+        end_date = end_date
+    ))
     .fetch_one(&pool)
     .await?;
 
-    let excluded_by_price: i64 = sqlx::query_scalar(
+    let excluded_by_price: i64 = sqlx::query_scalar(&format!(
         r#"
         SELECT COUNT(DISTINCT s.ts_code)
         FROM stock_basic s
         JOIN LATERAL (
             SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
         ) lc ON lc.close < 2.0
-        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+        WHERE s.list_date <= '{start_date}'
           AND EXISTS (
             SELECT 1 FROM ml_training_dataset d
             WHERE d.ts_code = s.ts_code
-              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+              AND d.trade_date >= '{start_date}'
+              AND d.trade_date <= '{end_date}'
           )
         "#,
-    )
+        start_date = start_date,
+        end_date = end_date
+    ))
     .fetch_one(&pool)
     .await?;
 
-    let excluded_by_name: i64 = sqlx::query_scalar(
+    let excluded_by_name: i64 = sqlx::query_scalar(&format!(
         r#"
         SELECT COUNT(DISTINCT s.ts_code)
         FROM stock_basic s
         WHERE (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
-          AND s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND s.list_date <= TO_CHAR((TO_DATE('{start_date}','YYYYMMDD') - INTERVAL '5 years'), 'YYYYMMDD')
           AND EXISTS (
             SELECT 1 FROM ml_training_dataset d
             WHERE d.ts_code = s.ts_code
-              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+              AND d.trade_date >= '{start_date}'
+              AND d.trade_date <= '{end_date}'
           )
         "#,
-    )
+        start_date = start_date,
+        end_date = end_date
+    ))
     .fetch_one(&pool)
     .await?;
 
-    let excluded_by_both: i64 = sqlx::query_scalar(
+    let excluded_by_both: i64 = sqlx::query_scalar(&format!(
         r#"
         SELECT COUNT(DISTINCT s.ts_code)
         FROM stock_basic s
@@ -282,14 +344,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SELECT a.close FROM adjusted_stock_daily a WHERE a.ts_code = s.ts_code ORDER BY a.trade_date DESC LIMIT 1
         ) lc ON lc.close < 2.0
         WHERE (UPPER(TRIM(s.name)) LIKE 'ST%' OR UPPER(TRIM(s.name)) LIKE '*ST%')
-          AND s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+          AND s.list_date <= TO_CHAR((TO_DATE('{start_date}','YYYYMMDD') - INTERVAL '5 years'), 'YYYYMMDD')
           AND EXISTS (
             SELECT 1 FROM ml_training_dataset d
             WHERE d.ts_code = s.ts_code
-              AND d.trade_date >= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+              AND d.trade_date >= '{start_date}'
+              AND d.trade_date <= '{end_date}'
           )
         "#,
-    )
+        start_date = start_date,
+        end_date = end_date
+    ))
     .fetch_one(&pool)
     .await?;
 
@@ -297,13 +362,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         sqlx::query_scalar(&format!(r#"
         SELECT COUNT(DISTINCT s.ts_code)
         FROM stock_basic s
-        WHERE s.list_date <= TO_CHAR((CURRENT_DATE - INTERVAL '5 years'), 'YYYYMMDD')
+        WHERE s.list_date <= '{start_date}'
           AND NOT EXISTS (
             SELECT 1 FROM ml_training_dataset d
             WHERE d.ts_code = s.ts_code
-              AND d.trade_date <= TO_CHAR((CURRENT_DATE - INTERVAL '{} years'), 'YYYYMMDD')
+              AND d.trade_date <= TO_CHAR((TO_DATE('{start_date}','YYYYMMDD') - INTERVAL '{min_years} years'), 'YYYYMMDD')
           )
-        "#, cli.min_years))
+        "#, start_date = start_date, min_years = cli.min_years))
         .fetch_one(&pool)
         .await?
     } else {
@@ -331,17 +396,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for p in &prefixes {
         let cnt = sel_set.iter().filter(|s| s.starts_with(p)).count();
         println!("  Prefix {}: {} stocks", p, cnt);
-    }
-
-    let train_cutoff = cli.train_cutoff.clone();
-    let val_windows_parsed = match parse_val_windows(&cli.val_windows) {
-        Ok(v) => v,
-        Err(e) => { eprintln!("{}", e); return Ok(()); }
-    };
-
-    println!("Using train_cutoff={} and {} validation window(s)", train_cutoff, val_windows_parsed.len());
-    for (i, (s, e)) in val_windows_parsed.iter().enumerate() {
-        println!("  val_{}: {} -> {}", i + 1, s, e);
     }
 
     // Get column names (normalize by trimming whitespace)
@@ -406,308 +460,122 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Skipping full training_data.csv export - this file is not used for model training.
-    println!("Skipping export of training_data.csv (disabled)");
 
-    println!("CSV columns: {}", csv_cols.len());
 
-    // Group rows by ts_code
-    use std::collections::HashMap;
-    let mut stock_map: HashMap<String, Vec<&sqlx::postgres::PgRow>> = HashMap::new();
-    for row in &rows {
-        let ts_code: String = row.try_get("ts_code").unwrap_or_default();
-        stock_map.entry(ts_code).or_default().push(row);
-    }
+    if cli.mode == "sliding" {
+        // Sliding window mode: export all data without splitting
+        println!("Exporting all data to training_data.csv (sliding window mode)");
+        let mut wtr = csv::Writer::from_path("training_data.csv")?;
+        wtr.write_record(&csv_cols)?;
 
-    // For each stock, take the most recent 5 years of data and split into: 3.5y train | 1y val | 0.5y test.
-    // For stocks with less than 5 years, split available days proportionally (70% train, 20% val, 10% test).
-    let mut train_rows = Vec::new();
-    let mut val_rows_per_window: Vec<Vec<&sqlx::postgres::PgRow>> = vec![Vec::new(); val_windows_parsed.len()];
-    let mut test_rows = Vec::new();
+        for row in &rows {
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
+                    Ok(None) => "".to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
+                    },
+                };
+                record.push(val);
+            }
+            wtr.write_record(&record)?;
+        }
 
-    // Audit map: ts_code -> [train, val_1, ..., val_N, test, dropped]
-    let mut audit_map: HashMap<String, Vec<usize>> = HashMap::new();
-    // Trading days approximated as 240 per year
-    let trading_days_year = 240usize;
-    let train_days = (3.5_f32 * trading_days_year as f32).round() as usize; // 3.5 years
-    let val_days = 1 * trading_days_year; // 1 year
-    let test_days = (trading_days_year as f32 * 0.5).round() as usize; // 0.5 year
-    let required_per_stock = train_days + val_days + test_days; // 5 years total (~1200 days)
-    let mut full_coverage_stocks = 0usize;
-    let mut partial_coverage_stocks = 0usize;
-    let mut skipped_by_min_years = 0usize;
-    // Diagnostics for date-based splits: how many stocks lack rows in each split
-    let mut missing_train = 0usize;
-    // per-validation-window missing counts
-    let mut missing_val_per_window: Vec<usize> = vec![0; val_windows_parsed.len()];
-    let mut missing_test = 0usize;
-    // min_years from CLI: convert to a minimum required trading days threshold when > 0
-    let min_required_days = if cli.min_years > 0 {
-        (cli.min_years * trading_days_year) as usize
+        wtr.flush()?;
+        println!("Exported {} rows to training_data.csv", rows.len());
     } else {
-        0usize
-    };
+        // Full mode: exclude test period rows from training export
+        println!("Exporting training data to training_data.csv (excluding trade_date > {})", test_cutoff);
+        let mut wtr = csv::Writer::from_path("training_data.csv")?;
+        wtr.write_record(&csv_cols)?;
 
-    for (ts_code, stock_rows) in stock_map {
-        // Sort by trade_date ascending
-        let mut sorted = stock_rows;
-        sorted.sort_by_key(|row| row.try_get::<String, _>("trade_date").unwrap_or_default());
-        let total = sorted.len();
-
-        // If user requested a minimum years threshold, skip stocks that don't meet it
-        if min_required_days > 0 && total < min_required_days {
-            skipped_by_min_years += 1;
-            eprintln!("⚠️  Skipping {}: only {} days history (< {} days for {} years)", ts_code, total, min_required_days, cli.min_years);
-            continue;
-        }
-
-        // Multi-window splitting by dates:
-        // Train: date <= train_cutoff
-        // Validation: any of the val_windows_parsed (val_1, val_2, ...)
-        // Test: date > last_val_end
-        let model_data = &sorted[..];
-        // Prepare per-window buckets
-        let mut train_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
-        let mut val_parts: Vec<Vec<&sqlx::postgres::PgRow>> = vec![Vec::new(); val_windows_parsed.len()];
-        let mut test_part: Vec<&sqlx::postgres::PgRow> = Vec::new();
-        let mut dropped_in_gaps = 0usize;
-        let last_val_end = if !val_windows_parsed.is_empty() { val_windows_parsed.last().unwrap().1.clone() } else { train_cutoff.clone() };
-
-        // per-stock audit counters: train + N vals + test + dropped
-        let mut counts: Vec<usize> = vec![0; 1 + val_windows_parsed.len() + 2];
-        // indices: 0=train, 1..=N val_i, N+1=test, N+2=dropped
-
-        for row in model_data.iter() {
-            let d: String = row.try_get("trade_date").unwrap_or_default();
-            if d.as_str() <= train_cutoff.as_str() {
-                train_part.push(row);
-                counts[0] += 1;
+        let mut n_written: usize = 0;
+        let mut n_excluded: usize = 0;
+        for row in &rows {
+            let trade_date: String = row.try_get("trade_date").unwrap_or_default();
+            if trade_date.as_str() > test_cutoff.as_str() {
+                n_excluded += 1;
                 continue;
             }
-            let mut assigned = false;
-            for (i, (s, e)) in val_windows_parsed.iter().enumerate() {
-                if d.as_str() >= s.as_str() && d.as_str() <= e.as_str() {
-                    val_parts[i].push(row);
-                    counts[1 + i] += 1;
-                    assigned = true;
-                    break;
-                }
+
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
+                    Ok(None) => "".to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
+                    },
+                };
+                record.push(val);
             }
-            if assigned { continue; }
-            if d.as_str() > last_val_end.as_str() {
-                test_part.push(row);
-                counts[1 + val_windows_parsed.len()] += 1;
-            } else {
-                // Gap: between train_cutoff and last_val_end but not in any val window -> drop and count
-                dropped_in_gaps += 1;
-                counts[1 + val_windows_parsed.len() + 1] += 1;
-            }
+            wtr.write_record(&record)?;
+            n_written += 1;
         }
 
-        // Fallback proportional split if nothing placed into any bin (very sparse history)
-        let placed = train_part.len() + test_part.len() + val_parts.iter().map(|v| v.len()).sum::<usize>();
-        if placed == 0 {
-            let n = model_data.len();
-            if n < 3 {
-                train_rows.extend_from_slice(model_data);
-                partial_coverage_stocks += 1;
-                continue;
-            }
-            let test_size = (n as f32 * 0.10).round() as usize;
-            let val_size = (n as f32 * 0.20).round() as usize;
-            let train_size = n.saturating_sub(val_size + test_size);
-            if train_size > 0 {
-                train_rows.extend_from_slice(&model_data[..train_size]);
-                counts[0] += train_size;
-            }
-            if val_size > 0 {
-                // put into first val window fallback
-                val_rows_per_window[0].extend_from_slice(&model_data[train_size..train_size + val_size]);
-                counts[1] += val_size;
-            }
-            if test_size > 0 {
-                test_rows.extend_from_slice(&model_data[train_size + val_size..]);
-                counts[1 + val_windows_parsed.len()] += test_size;
-            }
-            partial_coverage_stocks += 1;
-            audit_map.insert(ts_code.clone(), counts);
-            continue;
-        }
+        wtr.flush()?;
+        println!("Exported {} rows to training_data.csv (excluded {} rows with trade_date > {})", n_written, n_excluded, test_cutoff);
+    }
 
-        // Track missing bins for diagnostics per-window
-        if train_part.is_empty() {
-            missing_train += 1;
-        }
-        for (i, vp) in val_parts.iter().enumerate() {
-            if vp.is_empty() {
-                missing_val_per_window[i] += 1;
+    // Diagnostics for test split
+    let test_rows_count = rows.iter().filter(|r| {
+        let trade_date: String = r.try_get("trade_date").unwrap_or_default();
+        trade_date.as_str() > test_cutoff.as_str()
+    }).count();
+    let test_rows_in_sel = rows.iter().filter(|r| {
+        let trade_date: String = r.try_get("trade_date").unwrap_or_default();
+        let ts_code: String = r.try_get("ts_code").unwrap_or_default();
+        sel_set.contains(&ts_code) && trade_date.as_str() > test_cutoff.as_str()
+    }).count();
+    println!("Rows with trade_date > {}: {}", test_cutoff, test_rows_count);
+    println!("Rows with trade_date > {} and in selected set: {}", test_cutoff, test_rows_in_sel);
+
+    // Export test data set after test_cutoff into a separate CSV file based on selected stocks
+    println!("Exporting test data set to test_data.csv (data after {}, strictly based on selected stocks)", test_cutoff);
+    let mut test_wtr = csv::Writer::from_path("test_data.csv")?;
+    test_wtr.write_record(&csv_cols)?;
+
+    for row in &rows {
+        let trade_date: String = row.try_get("trade_date").unwrap_or_default();
+        let ts_code: String = row.try_get("ts_code").unwrap_or_default();
+        if sel_set.contains(&ts_code) && trade_date.as_str() > test_cutoff.as_str() {
+            let mut record = Vec::new();
+            for col in &csv_cols {
+                let val: String = match row.try_get::<Option<f64>, _>(col.as_str()) {
+                    Ok(Some(v)) => v.to_string(),
+                    Ok(None) => "".to_string(),
+                    Err(_) => match row.try_get::<Option<String>, _>(col.as_str()) {
+                        Ok(Some(s)) => s,
+                        Ok(None) => "".to_string(),
+                        Err(_) => match row.try_get::<Option<i32>, _>(col.as_str()) {
+                            Ok(Some(i)) => i.to_string(),
+                            Ok(None) => "".to_string(),
+                            Err(_) => "".to_string(),
+                        },
+                    },
+                };
+                record.push(val);
             }
-        }
-        if test_part.is_empty() {
-            missing_test += 1;
-        }
-
-        // Use date-split parts
-        if !train_part.is_empty() {
-            train_rows.extend_from_slice(&train_part);
-        }
-        for (i, vp) in val_parts.into_iter().enumerate() {
-            if !vp.is_empty() {
-                val_rows_per_window[i].extend_from_slice(&vp);
-            }
-        }
-        if !test_part.is_empty() {
-            test_rows.extend_from_slice(&test_part);
-        }
-
-        // Save per-stock audit counts
-        audit_map.insert(ts_code.clone(), counts);
-
-        // Track coverage: if a stock has at least required_per_stock days across the window, consider full_coverage
-        if placed >= required_per_stock {
-            full_coverage_stocks += 1;
-        } else {
-            partial_coverage_stocks += 1;
+            test_wtr.write_record(&record)?;
         }
     }
 
-    println!("Stocks with full 5y coverage: {}, partial: {}, skipped by --min-years: {}, train_cutoff: {}, validation windows: {}", full_coverage_stocks, partial_coverage_stocks, skipped_by_min_years, train_cutoff, val_windows_parsed.len());
-    println!("Stocks missing bins by date-split: missing_train: {}, missing_test: {}, missing_val_per_window: {:?}", missing_train, missing_test, missing_val_per_window);
-    if partial_coverage_stocks > 0 {
-        println!("Note: {} stocks required proportional fallback splits. Per-stock target days (fallback): {} (train {} val {} test {})", partial_coverage_stocks, required_per_stock, train_days, val_days, test_days);
-    }
-
-    // Sanity check: ensure audit per-stock sums for train/val/test match the rows we will write
-    let audit_train_total: usize = audit_map.values().map(|c| c.get(0).cloned().unwrap_or(0)).sum();
-    let audit_val_totals: Vec<usize> = (0..val_windows_parsed.len()).map(|i| audit_map.values().map(|c| c.get(1 + i).cloned().unwrap_or(0)).sum()).collect();
-    let audit_test_total: usize = audit_map.values().map(|c| c.get(1 + val_windows_parsed.len()).cloned().unwrap_or(0)).sum();
-    let exported_val_totals: Vec<usize> = val_rows_per_window.iter().map(|v| v.len()).collect();
-    if audit_train_total != train_rows.len() || audit_test_total != test_rows.len() || audit_val_totals != exported_val_totals {
-        eprintln!("Audit vs export mismatch: train audit {} vs exported {}, val audit {:?} vs exported {:?}, test audit {} vs exported {}", audit_train_total, train_rows.len(), audit_val_totals, exported_val_totals, audit_test_total, test_rows.len());
-        return Ok(());
-    }
-
-    // Write CSVs for train/val/test
-    let mut write_csv =
-        |fname: &str, rows: &Vec<&sqlx::postgres::PgRow>| -> Result<(), Box<dyn Error>> {
-            let file = File::create(fname)?;
-            let mut writer = BufWriter::new(file);
-            writeln!(writer, "{}", csv_cols.join(","))?;
-            for row in rows {
-                let mut vals = Vec::with_capacity(csv_cols.len());
-                    for col in &csv_cols {
-                        let idx = all_colnames.iter().position(|c| c == col).unwrap();
-                        let val = row.try_get_raw(idx);
-                    let s = if val.is_ok() && !val.as_ref().unwrap().is_null() {
-                        if let Ok(v) = row.try_get::<&str, _>(idx) {
-                            v.to_string()
-                        } else if let Ok(v) = row.try_get::<f64, _>(idx) {
-                            format!("{:.6}", v)
-                        } else if let Ok(v) = row.try_get::<i32, _>(idx) {
-                            v.to_string()
-                        } else if let Ok(v) = row.try_get::<i16, _>(idx) {
-                            v.to_string()
-                        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-                            v.to_string()
-                        } else {
-                            "".to_string()
-                        }
-                    } else {
-                        "".to_string()
-                    };
-                    vals.push(s);
-                }
-                writeln!(writer, "{}", vals.join(","))?;
-            }
-            Ok(())
-        };
-    write_csv("train.csv", &train_rows)?;
-    for (i, rows) in val_rows_per_window.iter().enumerate() {
-        write_csv(&format!("val_{}.csv", i + 1), rows)?;
-    }
-    write_csv("test.csv", &test_rows)?;
-
-    // Print counts
-    let val_counts: Vec<usize> = val_rows_per_window.iter().map(|v| v.len()).collect();
-    println!("Exported train.csv: {} rows", train_rows.len());
-    for (i, cnt) in val_counts.iter().enumerate() {
-        println!("  val_{}.csv: {} rows", i + 1, cnt);
-    }
-    println!("Exported test.csv: {} rows", test_rows.len());
-
-    // Write audit CSV: ts_code, train, val_1..val_N, test, dropped, total
-    let mut audit_file = File::create("export_audit.csv")?;
-    let mut audit_writer = BufWriter::new(&mut audit_file);
-    let mut audit_header = vec!["ts_code".to_string(), "train".to_string()];
-    for i in 0..val_windows_parsed.len() {
-        audit_header.push(format!("val_{}", i + 1));
-    }
-    audit_header.push("test".to_string());
-    audit_header.push("dropped".to_string());
-    audit_header.push("total".to_string());
-    writeln!(audit_writer, "{}", audit_header.join(","))?;
-    for (ts, counts) in &audit_map {
-        let mut row = Vec::new();
-        row.push(ts.clone());
-        // counts length: 1 + N + 2
-        let train_cnt = counts.get(0).cloned().unwrap_or(0);
-        row.push(train_cnt.to_string());
-        for i in 0..val_windows_parsed.len() {
-            let v = counts.get(1 + i).cloned().unwrap_or(0);
-            row.push(v.to_string());
-        }
-        let test_cnt = counts.get(1 + val_windows_parsed.len()).cloned().unwrap_or(0);
-        let dropped_cnt = counts.get(1 + val_windows_parsed.len() + 1).cloned().unwrap_or(0);
-        row.push(test_cnt.to_string());
-        row.push(dropped_cnt.to_string());
-        let total_cnt: usize = counts.iter().sum();
-        row.push(total_cnt.to_string());
-        writeln!(audit_writer, "{}", row.join(","))?;
-    }
+    test_wtr.flush()?;
+    println!("Exported test data set to test_data.csv");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_empty_default() {
-        let v = parse_val_windows(&vec![]).unwrap();
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0], ("20250301".to_string(), "20251103".to_string()));
-    }
-
-    #[test]
-    fn parse_two_windows_sorted() {
-        let input = vec!["20250701:20251103".to_string(), "20250301:20250630".to_string()];
-        let v = parse_val_windows(&input).unwrap();
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0].0, "20250301");
-        assert_eq!(v[1].0, "20250701");
-    }
-
-    #[test]
-    fn parse_invalid_format() {
-        let input = vec!["2025030120251103".to_string()];
-        assert!(parse_val_windows(&input).is_err());
-    }
-
-    #[test]
-    fn parse_start_after_end() {
-        let input = vec!["20250301:20250228".to_string()];
-        assert!(parse_val_windows(&input).is_err());
-    }
-
-    #[test]
-    fn parse_overlapping() {
-        let input = vec!["20250301:20250630".to_string(), "20250615:20251103".to_string()];
-        assert!(parse_val_windows(&input).is_err());
-    }
-
-    #[test]
-    fn parse_contiguous() {
-        let input = vec!["20250301:20250630".to_string(), "20250630:20251103".to_string()];
-        assert!(parse_val_windows(&input).is_err());
-    }
 }

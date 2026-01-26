@@ -32,6 +32,7 @@ pub fn train_with_torch(
     max_epochs_override: Option<usize>,
     early_stop_override: Option<usize>,
     direction_weight: Option<f64>,
+    resume_from: Option<String>,
 ) -> Result<()> {
     println!("Initializing PyTorch model on {:?}...", device);
 
@@ -86,6 +87,13 @@ pub fn train_with_torch(
     }
     let model = TorchStockModel::new(&vs.root(), &config);
 
+    // Load checkpoint if resuming
+    if let Some(ref checkpoint_path) = resume_from {
+        println!("Loading checkpoint from: {}", checkpoint_path);
+        vs.load(checkpoint_path)?;
+        println!("✓ Successfully loaded checkpoint");
+    }
+
     // Optimizer
     let mut opt = nn::Adam::default().build(&vs, learning_rate)?;
 
@@ -95,6 +103,11 @@ pub fn train_with_torch(
     fs::create_dir_all(&artifact_dir)?;
 
     println!("\n=== Training Configuration ===");
+    if let Some(ref checkpoint_path) = resume_from {
+        println!("Resuming from checkpoint: {}", checkpoint_path);
+    } else {
+        println!("Starting fresh training");
+    }
     println!("Device: {:?}", device);
     println!("Sequence length: {}", seq_len);
     println!("Batch size: {}", batch_size);
@@ -203,7 +216,7 @@ pub fn train_with_torch(
             sample_weight_method.as_deref().unwrap_or("none"),
             sample_weight_decay,
             sample_weight_normalize.as_deref().unwrap_or("mean"),
-            weight_direction,
+            direction_weight,
         )?;
         println!(
             "  Train Loss: {:.6} (MSE: {:.6}, Dir: {:.6})",
@@ -212,7 +225,7 @@ pub fn train_with_torch(
 
         // Validation
         let valid_loss =
-            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len, huber_delta, compute_ic, &topk_percentiles, sample_weight_method.as_deref().unwrap_or("none"), sample_weight_decay, sample_weight_normalize.as_deref().unwrap_or("mean"), weight_direction)?; // validation excludes weight decay term
+            validate_epoch_stream(&model, &valid_datasets, batch_size, device, seq_len, huber_delta, compute_ic, &topk_percentiles, sample_weight_method.as_deref().unwrap_or("none"), sample_weight_decay, sample_weight_normalize.as_deref().unwrap_or("mean"), direction_weight)?; // validation excludes weight decay term
         println!("  Valid Loss: {:.6}", valid_loss);
 
         // Save best model and track improvement
@@ -286,7 +299,7 @@ fn train_epoch_stream(
     sample_weight_method: &str,
     sample_weight_decay: f64,
     sample_weight_normalize: &str,
-    direction_weight: f64,
+    direction_weight: Option<f64>,
 ) -> Result<(f64, f64, f64)> {
     let mut total_loss = 0.0;
     let mut total_mse = 0.0;
@@ -528,7 +541,7 @@ fn validate_epoch_stream(
     sample_weight_method: &str,
     sample_weight_decay: f64,
     sample_weight_normalize: &str,
-    direction_weight: f64,
+    direction_weight: Option<f64>,
 ) -> Result<f64> {
     let mut total_loss = 0.0;
     let mut num_batches = 0;
@@ -536,7 +549,7 @@ fn validate_epoch_stream(
     // Dual-task learning weights (same as training)
     let weight_1day_mse = 0.60;
     let weight_3day_mse = 0.25;
-    let weight_direction = direction_weight; // passed from caller (default to 0.15 in train_with_torch)
+    let weight_direction = direction_weight.unwrap_or(0.15); // Direction loss: default 0.15 unless overridden
 
     // Reusable device buffers
     let mut dev_inputs_buf: Option<Tensor> = None;
