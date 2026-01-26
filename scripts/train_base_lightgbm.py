@@ -65,6 +65,19 @@ def main():
     y_train = train[args.target].fillna(0.0)
     y_val = val[args.target].fillna(0.0)
 
+    # Defensive: convert any remaining object/string dtypes to category and align categories
+    for c in X_train.columns:
+        if X_train[c].dtype == 'object' or str(X_train[c].dtype).startswith('string') or X_val[c].dtype == 'object' or str(X_val[c].dtype).startswith('string'):
+            X_train[c] = X_train[c].fillna('MISSING').astype('category')
+            X_val[c] = X_val[c].fillna('MISSING').astype('category')
+            cats = pd.Index(X_train[c].cat.categories).union(X_val[c].cat.categories).tolist()
+            if 'MISSING' not in cats:
+                cats = ['MISSING'] + cats
+            X_train[c] = X_train[c].cat.set_categories(cats)
+            X_val[c] = X_val[c].cat.set_categories(cats)
+            if c not in cat_features:
+                cat_features.append(c)
+
     dtrain = lgb.Dataset(X_train, label=y_train, categorical_feature=cat_features if cat_features else None)
     dval = lgb.Dataset(X_val, label=y_val, reference=dtrain, categorical_feature=cat_features if cat_features else None)
 
