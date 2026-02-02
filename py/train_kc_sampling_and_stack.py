@@ -22,7 +22,13 @@ from sklearn.utils import resample
 import lightgbm as lgb
 from xgboost import XGBClassifier
 
-os.chdir('/Users/alex/rust_llm_stock')
+# Set working directory to project root (use script location as fallback)
+proj_root = Path(__file__).resolve().parents[1]
+try:
+    os.chdir(str(proj_root))
+    print(f"Working dir set to {proj_root}")
+except Exception as e:
+    print(f"Could not change working dir to {proj_root}: {e}")
 Path('artifacts').mkdir(exist_ok=True)
 
 print('='*70)
@@ -50,13 +56,18 @@ for c in emb_cols:
     X_train_num[c] = df_train[c].fillna(0.0)
     X_val_num[c] = df_val[c].fillna(0.0)
     X_test_num[c] = df_test[c].fillna(0.0)
-# simple label encode
+# simple label encode (vectorized mapping for speed and unseen handling)
 label_encoders = {}
 for c in cat_cols:
     le = LabelEncoder()
-    X_train_num[c] = le.fit_transform(df_train[c].astype(str))
-    X_val_num[c] = le.transform(df_val[c].astype(str))
-    X_test_num[c] = df_test[c].astype(str).apply(lambda x: le.transform([x])[0] if x in le.classes_ else 0)
+    train_vals = df_train[c].astype(str)
+    val_vals = df_val[c].astype(str)
+    test_vals = df_test[c].astype(str)
+    le.fit(train_vals)
+    mapping = {cls: i for i, cls in enumerate(le.classes_)}
+    X_train_num[c] = train_vals.map(mapping).fillna(0).astype(int)
+    X_val_num[c] = val_vals.map(mapping).fillna(0).astype(int)
+    X_test_num[c] = test_vals.map(mapping).fillna(0).astype(int)
     label_encoders[c] = le
 
 y_train = df_train['next_day_direction'].map({-1:0,1:1}).astype(int)
