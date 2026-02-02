@@ -15,6 +15,10 @@ use ta::{
     },
 };
 
+/// Embedding defaults (fixed constants)
+const EMBED_DIM: usize = 8;
+const EMBED_SEED: u64 = 42;
+
 
 /// Struct to hold daily data (raw values)
 #[derive(Debug, Clone)]
@@ -594,7 +598,23 @@ struct Cli {
     /// Winsorization tail percentile (e.g., 0.025 for 2.5%)
     #[arg(long, default_value_t = 0.025)]
     winsorize_pct: f64,
-}
+
+    /// Winsorize selected heavy-tailed features before insertion (requires concurrency=1)
+    #[arg(long, default_value_t = false)]
+    winsorize_features: bool,
+
+    /// Compute VIF across numeric features and DROP columns with VIF > 10 (memory heavy; collects full dataset). Only supported with concurrency=1.
+    #[arg(long, default_value_t = false)]
+    drop_high_vif: bool,
+
+    /// Apply log1p transform to selected skewed positive features before scaling (requires concurrency=1 if used)
+    #[arg(long, default_value_t = false)]
+    apply_log1p: bool,
+
+    /// Standardize (z-score) numeric features across the dataset before insertion (requires concurrency=1 if used)
+    #[arg(long, default_value_t = false)]
+    standardize: bool,
+} 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -798,9 +818,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let effective_current_date = final_max_date.clone();
 
     // Pre-fetch industry performance data once for all stocks (for full date range)
-    println!("\n=== Pre-fetching Industry Performance Data ===");
+    // Note: We need data from dates BEFORE final_min_date for prior-day lookups,
+    // so extend the prefetch range backward by 10 trading days (~14 calendar days)
+    let industry_prefetch_start = chrono::NaiveDate::parse_from_str(&final_min_date, "%Y%m%d")
+        .ok()
+        .map(|d| (d - chrono::Duration::days(14)).format("%Y%m%d").to_string())
+        .unwrap_or_else(|| final_min_date.clone());
+    println!("\n=== Pre-fetching Industry Performance Data ({} to {}) ===", industry_prefetch_start, final_max_date);
     let industry_perf_data =
-        std::sync::Arc::new(prefetch_industry_performance(&dbpool, &final_min_date, &final_max_date).await);
+        std::sync::Arc::new(prefetch_industry_performance(&dbpool, &industry_prefetch_start, &final_max_date).await);
 
 
     // Prefetch index data for all required indices
@@ -816,6 +842,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Process stocks with optional concurrency
     let total_stocks = stocks.len();
+
+    // If requested, collect all rows for VIF computation before inserting
+    let mut all_rows: Vec<FeatureRow> = Vec::new();
+    if (cli.drop_high_vif || cli.apply_log1p || cli.standardize || cli.winsorize_features) && cli.concurrency != 1 {
+        eprintln!("Error: --drop-high-vif/--apply-log1p/--standardize/--winsorize-features require concurrency=1 (to collect rows deterministically)");
+        std::process::exit(2);
+    } 
 
     // Final counters (populated by selected execution path)
     let mut final_processed: usize = 0;
@@ -850,7 +883,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 cli.leak_check,
                 &effective_current_date,
             )
-            .await;
+            .await; 
             let calc_elapsed = calc_start.elapsed().as_millis();
 
             if feature_rows.is_empty() {
@@ -862,7 +895,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                 let insert_start = std::time::Instant::now();
                 if !cli.dry_run {
-                    batch_insert_feature_rows(&dbpool, &feature_rows).await?;
+                    if cli.drop_high_vif || cli.apply_log1p || cli.standardize || cli.winsorize_features {
+                        // Collect rows for a single global transform/VIF pass
+                        all_rows.extend(feature_rows);
+                    } else {
+                        batch_insert_feature_rows(&dbpool, &feature_rows).await?;
+                    }
                 }
                 let insert_elapsed = insert_start.elapsed().as_millis();
 
@@ -910,6 +948,36 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 final_skipped
             );
         }
+
+        // If requested, optionally apply log1p and/or standardization to collected rows, then compute VIF and/or insert
+        if cli.drop_high_vif || cli.apply_log1p || cli.standardize || cli.winsorize_features {
+            println!("⚙️  Preparing collected rows (n_rows={})...", all_rows.len());
+
+            // Apply winsorization (always within apply_log1p_and_standardize), and optionally log1p/standardize
+            println!("🔧 Applying winsorization and optional log1p/standard scaling...");
+            // Always run transformations so artifacts (scale params) are produced during dry-run for inspection
+            apply_log1p_and_standardize(&mut all_rows, cli.apply_log1p, cli.standardize)?;
+            println!("✅ Transformations applied. scale params saved to artifacts/scale_params.csv (if standardize enabled)");
+            if cli.dry_run {
+                println!("Dry-run: insertion will be skipped, but transforms and artifacts are written.");
+            }
+
+            if cli.drop_high_vif {
+                println!("⚙️  Computing VIF across collected rows (n_rows={})...", all_rows.len());
+                // Generate VIF report and SQL; when dry-run, do not execute ALTER statements
+                compute_vif_and_drop_columns(&dbpool, &all_rows, !cli.dry_run).await?;
+                if cli.dry_run {
+                    println!("Dry-run: VIF report and SQL generated, no schema changes executed.");
+                }
+            }
+
+            // Insert all rows in a batch (if not dry-run & no VIF-only dry-run)
+            if !cli.dry_run {
+                batch_insert_feature_rows(&dbpool, &all_rows).await?;
+                final_records = all_rows.len();
+                println!("✅ Inserted {} rows after transforms.", final_records);
+            }
+        }
     } else {
         println!("\n=== Processing {} stocks (concurrency={}) ===\n", total_stocks, concurrency);
 
@@ -949,7 +1017,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         cli.leak_check,
                         &effective_current_date_value,
                     )
-                    .await;
+                    .await; 
                     let calc_elapsed = calc_start.elapsed().as_millis();
 
                     if feature_rows.is_empty() {
@@ -1042,33 +1110,36 @@ async fn insert_feature_row(
         INSERT INTO ml_training_dataset (
             ts_code, trade_date, industry, act_ent_type, volume, amount, month, weekday, quarter, week_no,
             open_pct, high_pct, low_pct, close_pct, high_from_open_pct, low_from_open_pct, close_from_open_pct,
-            intraday_range_pct, close_position_in_range, ema_5, ema_10, ema_20, ema_30, ema_60, sma_5, sma_10, sma_20,
+            intraday_range_pct, close_position_in_range, sma_5, sma_10, sma_20,
             macd_line, macd_signal, macd_histogram, macd_weekly_line, macd_weekly_signal, macd_monthly_line, macd_monthly_signal,
             rsi_14, kdj_k, kdj_d, kdj_j, bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b, atr, volatility_5, volatility_20,
             asi, obv, volume_ratio, price_momentum_5, price_momentum_10, price_momentum_20, price_position_52w, body_size,
-            upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25,
-            aroon_down_25, return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
+            upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, aroon_up_25,
+            return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
             price_roc_5, price_roc_10, price_roc_20, hist_volatility_20, is_doji, is_hammer, is_shooting_star, consecutive_days,
             index_csi300_pct_chg, index_csi300_vs_ma5_pct, index_csi300_vs_ma20_pct, index_chinext_pct_chg, index_chinext_vs_ma5_pct,
             index_chinext_vs_ma20_pct, index_xin9_pct_chg, index_xin9_vs_ma5_pct, index_xin9_vs_ma20_pct,
             index_hsi_pct_chg, index_hsi_vs_ma5_pct, index_hsi_vs_ma20_pct,
             fx_usdcnh_pct_chg, fx_usdcnh_vs_ma5_pct, fx_usdcnh_vs_ma20_pct,
             net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow,
-            turnover_rate, turnover_rate_f, /* volume_ratio, */ pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share,
-            free_share, total_mv, circ_mv,
+            turnover_rate, turnover_rate_f, /* volume_ratio, */ pe, pe_ttm, pb, dv_ratio, dv_ttm, total_share, float_share,
+            free_share,
+            industry_emb_0, industry_emb_1, industry_emb_2, industry_emb_3, industry_emb_4, industry_emb_5, industry_emb_6, industry_emb_7,
+            act_ent_type_emb_0, act_ent_type_emb_1, act_ent_type_emb_2, act_ent_type_emb_3, act_ent_type_emb_4, act_ent_type_emb_5, act_ent_type_emb_6, act_ent_type_emb_7,
+            close_position_in_range_imputed, macd_monthly_line_imputed, macd_monthly_signal_imputed,
             vol_percentile, high_vol_regime, next_day_return,
             next_day_direction, next_3day_return, next_3day_direction,
             pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days
         ) VALUES (
-            -- 1-126: all columns including HSI, USDCNH, and moneyflow
+            -- 1-145: all columns including embeddings and imputation flags
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,$88,$89,$90,$91,$92,$93,$94,$95,$96,
-            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125,$126
+            $97,$98,$99,$100,$101,$102,$103,$104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,$118,$119,$120,$121,$122,$123,$124,$125,$126,$127,$128,$129,$130,$131,$132,$133,$134,$135,$136,$137,$138,$139,$140,$141,$142,$143,$144,$145
         )
         ON CONFLICT (ts_code, trade_date) DO UPDATE SET
             industry_avg_return = COALESCE(ml_training_dataset.industry_avg_return, EXCLUDED.industry_avg_return),
             stock_vs_industry = COALESCE(ml_training_dataset.stock_vs_industry, EXCLUDED.stock_vs_industry),
             industry_momentum_5d = COALESCE(ml_training_dataset.industry_momentum_5d, EXCLUDED.industry_momentum_5d)
-    "#,
+    "#, 
     )
     .bind(row.ts_code.clone())
     .bind(row.trade_date.clone())
@@ -1089,11 +1160,6 @@ async fn insert_feature_row(
     .bind(row.close_from_open_pct)
     .bind(row.intraday_range_pct)
     .bind(row.close_position_in_range)
-    .bind(row.ema_5)
-    .bind(row.ema_10)
-    .bind(row.ema_20)
-    .bind(row.ema_30)
-    .bind(row.ema_60)
     .bind(row.sma_5)
     .bind(row.sma_10)
     .bind(row.sma_20)
@@ -1130,9 +1196,7 @@ async fn insert_feature_row(
     .bind(row.adx_14)
     .bind(row.vwap_distance_pct)
     .bind(row.cmf_20)
-    .bind(row.williams_r_14)
     .bind(row.aroon_up_25)
-    .bind(row.aroon_down_25)
     .bind(row.return_lag_1)
     .bind(row.return_lag_2)
     .bind(row.return_lag_3)
@@ -1176,15 +1240,33 @@ async fn insert_feature_row(
     .bind(row.pe)
     .bind(row.pe_ttm)
     .bind(row.pb)
-    .bind(row.ps)
-    .bind(row.ps_ttm)
     .bind(row.dv_ratio)
     .bind(row.dv_ttm)
     .bind(row.total_share)
     .bind(row.float_share)
     .bind(row.free_share)
-    .bind(row.total_mv)
-    .bind(row.circ_mv)
+    // Embeddings: industry_emb_0..7
+    .bind(row.industry_emb[0])
+    .bind(row.industry_emb[1])
+    .bind(row.industry_emb[2])
+    .bind(row.industry_emb[3])
+    .bind(row.industry_emb[4])
+    .bind(row.industry_emb[5])
+    .bind(row.industry_emb[6])
+    .bind(row.industry_emb[7])
+    // Embeddings: act_ent_type_emb_0..7
+    .bind(row.act_ent_type_emb[0])
+    .bind(row.act_ent_type_emb[1])
+    .bind(row.act_ent_type_emb[2])
+    .bind(row.act_ent_type_emb[3])
+    .bind(row.act_ent_type_emb[4])
+    .bind(row.act_ent_type_emb[5])
+    .bind(row.act_ent_type_emb[6])
+    .bind(row.act_ent_type_emb[7])
+    // Imputation flags
+    .bind(row.close_position_in_range_imputed)
+    .bind(row.macd_monthly_line_imputed)
+    .bind(row.macd_monthly_signal_imputed)
     .bind(row.vol_percentile)
     .bind(row.high_vol_regime)
     .bind(row.next_day_return)
@@ -1214,37 +1296,52 @@ async fn batch_insert_feature_rows(
     // Use a transaction for atomic batch insert
     let mut tx = pool.begin().await?;
 
+    // Query existing columns to build dynamic insert that is resilient to column drops
+    let cols = sqlx::query!("SELECT column_name FROM information_schema.columns WHERE table_name = 'ml_training_dataset' ORDER BY ordinal_position")
+        .fetch_all(pool)
+        .await?;
+    let existing_cols: std::collections::HashSet<String> = cols.into_iter().filter_map(|r| r.column_name).collect();
+
+    // Desired insertion order (mirrors original hard-coded insert)
+    let desired_order: Vec<&str> = vec![
+        "ts_code", "trade_date", "industry", "act_ent_type", "volume", "amount", "weekday", "week_no",
+        "open_pct", "high_pct", "low_pct", "close_pct", "high_from_open_pct", "low_from_open_pct", "close_from_open_pct",
+        "intraday_range_pct", "close_position_in_range", "sma_5",
+        "macd_signal", "macd_weekly_signal", "macd_monthly_signal",
+        "rsi_14", "kdj_j", "bb_bandwidth", "volatility_5", "volatility_20",
+        "asi", "obv", "volume_ratio", "price_momentum_5", "price_momentum_10", "price_momentum_20", "price_position_52w", "body_size",
+        "upper_shadow", "lower_shadow", "trend_strength", "vwap_distance_pct", "cmf_20", "aroon_up_25",
+        "return_lag_2", "return_lag_3", "volume_roc_5", "volume_spike",
+        "is_doji", "is_hammer", "is_shooting_star", "consecutive_days",
+        "index_chinext_pct_chg", "index_chinext_vs_ma5_pct", "index_chinext_vs_ma20_pct", "index_xin9_pct_chg", "index_xin9_vs_ma5_pct", "index_xin9_vs_ma20_pct",
+        "index_hsi_pct_chg", "index_hsi_vs_ma5_pct", "index_hsi_vs_ma20_pct",
+        "fx_usdcnh_vs_ma5_pct", "fx_usdcnh_vs_ma20_pct",
+        "net_mf_vol", "net_mf_amount", "smart_money_ratio", "large_order_flow",
+        "industry_avg_return", "stock_vs_industry", "industry_momentum_5d",
+        "turnover_rate", "pe", "pe_ttm", "pb", "dv_ratio", "dv_ttm", "float_share",
+        "free_share",
+        // embeddings
+        "industry_emb_0","industry_emb_1","industry_emb_2","industry_emb_3","industry_emb_4","industry_emb_5","industry_emb_6","industry_emb_7",
+        "act_ent_type_emb_0","act_ent_type_emb_1","act_ent_type_emb_2","act_ent_type_emb_3","act_ent_type_emb_4","act_ent_type_emb_5","act_ent_type_emb_6","act_ent_type_emb_7",
+        // imputation flags and others
+        "close_position_in_range_imputed", "macd_monthly_line_imputed", "macd_monthly_signal_imputed",
+        "vol_percentile", "high_vol_regime", "next_day_return",
+        "next_day_direction", "next_3day_return", "next_3day_direction",
+        "pe_percentile_52w", "price_vs_52w_high", "consecutive_up_days"
+    ];
+
+    let insert_columns: Vec<&str> = desired_order.into_iter().filter(|c| existing_cols.contains(&c.to_string())).collect();
+
     // Process in chunks of 50 rows for faster visibility (was 500)
     const CHUNK_SIZE: usize = 50;
 
     for chunk in rows.chunks(CHUNK_SIZE) {
-        // Build multi-value INSERT statement dynamically
-        let mut sql = String::from(
-            r#"INSERT INTO ml_training_dataset (
-                ts_code, trade_date, industry, act_ent_type, volume, amount, month, weekday, quarter, week_no,
-                open_pct, high_pct, low_pct, close_pct, high_from_open_pct, low_from_open_pct, close_from_open_pct,
-                intraday_range_pct, close_position_in_range, ema_5, ema_10, ema_20, ema_30, ema_60, sma_5, sma_10, sma_20,
-                macd_line, macd_signal, macd_histogram, macd_weekly_line, macd_weekly_signal, macd_monthly_line, macd_monthly_signal,
-                rsi_14, kdj_k, kdj_d, kdj_j, bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b, atr, volatility_5, volatility_20,
-                asi, obv, volume_ratio, price_momentum_5, price_momentum_10, price_momentum_20, price_position_52w, body_size,
-                upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25,
-                aroon_down_25, return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
-                price_roc_5, price_roc_10, price_roc_20, hist_volatility_20, is_doji, is_hammer, is_shooting_star, consecutive_days,
-                index_csi300_pct_chg, index_csi300_vs_ma5_pct, index_csi300_vs_ma20_pct, index_chinext_pct_chg, index_chinext_vs_ma5_pct,
-                index_chinext_vs_ma20_pct, index_xin9_pct_chg, index_xin9_vs_ma5_pct, index_xin9_vs_ma20_pct,
-                index_hsi_pct_chg, index_hsi_vs_ma5_pct, index_hsi_vs_ma20_pct,
-                fx_usdcnh_pct_chg, fx_usdcnh_vs_ma5_pct, fx_usdcnh_vs_ma20_pct,
-                net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow, industry_avg_return, stock_vs_industry, industry_momentum_5d, industry_momentum,
-                turnover_rate, turnover_rate_f, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share,
-                free_share, total_mv, circ_mv,
-                vol_percentile, high_vol_regime, next_day_return,
-                next_day_direction, next_3day_return, next_3day_direction,
-                pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days
-            ) VALUES "#,
-        );
+        // Build multi-value INSERT statement dynamically using only existing columns
+        let col_list = insert_columns.join(", ");
+        let mut sql = format!("INSERT INTO ml_training_dataset ({}) VALUES ", col_list);
 
-        // Generate value placeholders for each row
-        let cols_per_row = 126;
+        // Generate value placeholders for each row (cols_per_row == insert_columns.len())
+        let cols_per_row = insert_columns.len();
         for (row_idx, _row) in chunk.iter().enumerate() {
             if row_idx > 0 {
                 sql.push_str(", ");
@@ -1259,144 +1356,162 @@ async fn batch_insert_feature_rows(
             sql.push(')');
         }
 
-        // Upsert: overwrite industry-related fields to ensure corrected lagged values replace previous (possibly leaked) values
-        sql.push_str(" ON CONFLICT (ts_code, trade_date) DO UPDATE SET \
-            industry_avg_return = EXCLUDED.industry_avg_return, \
-            stock_vs_industry = EXCLUDED.stock_vs_industry, \
-            industry_momentum_5d = EXCLUDED.industry_momentum_5d, \
-            industry_momentum = EXCLUDED.industry_momentum");
+        // Upsert: only include update assignments for columns that exist in the current schema
+        let mut update_assigns: Vec<String> = Vec::new();
+        for &c in insert_columns.iter() {
+            if c != "ts_code" && c != "trade_date" {
+                update_assigns.push(format!("{} = EXCLUDED.{}", c, c));
+            }
+        }
+        if !update_assigns.is_empty() {
+            sql.push_str(&format!(" ON CONFLICT (ts_code, trade_date) DO UPDATE SET {}", update_assigns.join(", ")));
+        } else {
+            sql.push_str(" ON CONFLICT (ts_code, trade_date) DO NOTHING");
+        }
 
         // Build the query with all bindings
         let mut query = sqlx::query(&sql);
 
         for row in chunk {
-            query = query
-                .bind(&row.ts_code)
-                .bind(&row.trade_date)
-                .bind(&row.industry)
-                .bind(&row.act_ent_type)
-                .bind(row.volume)
-                .bind(row.amount)
-                .bind(row.month)
-                .bind(row.weekday)
-                .bind(row.quarter)
-                .bind(row.week_no)
-                .bind(row.open_pct)
-                .bind(row.high_pct)
-                .bind(row.low_pct)
-                .bind(row.close_pct)
-                .bind(row.high_from_open_pct)
-                .bind(row.low_from_open_pct)
-                .bind(row.close_from_open_pct)
-                .bind(row.intraday_range_pct)
-                .bind(row.close_position_in_range)
-                .bind(row.ema_5)
-                .bind(row.ema_10)
-                .bind(row.ema_20)
-                .bind(row.ema_30)
-                .bind(row.ema_60)
-                .bind(row.sma_5)
-                .bind(row.sma_10)
-                .bind(row.sma_20)
-                .bind(row.macd_line)
-                .bind(row.macd_signal)
-                .bind(row.macd_histogram)
-                .bind(row.macd_weekly_line)
-                .bind(row.macd_weekly_signal)
-                .bind(row.macd_monthly_line)
-                .bind(row.macd_monthly_signal)
-                .bind(row.rsi_14)
-                .bind(row.kdj_k)
-                .bind(row.kdj_d)
-                .bind(row.kdj_j)
-                .bind(row.bb_upper)
-                .bind(row.bb_middle)
-                .bind(row.bb_lower)
-                .bind(row.bb_bandwidth)
-                .bind(row.bb_percent_b)
-                .bind(row.atr)
-                .bind(row.volatility_5)
-                .bind(row.volatility_20)
-                .bind(row.asi)
-                .bind(row.obv)
-                .bind(row.volume_ratio)
-                .bind(row.price_momentum_5)
-                .bind(row.price_momentum_10)
-                .bind(row.price_momentum_20)
-                .bind(row.price_position_52w)
-                .bind(row.body_size)
-                .bind(row.upper_shadow)
-                .bind(row.lower_shadow)
-                .bind(row.trend_strength)
-                .bind(row.adx_14)
-                .bind(row.vwap_distance_pct)
-                .bind(row.cmf_20)
-                .bind(row.williams_r_14)
-                .bind(row.aroon_up_25)
-                .bind(row.aroon_down_25)
-                .bind(row.return_lag_1)
-                .bind(row.return_lag_2)
-                .bind(row.return_lag_3)
-                .bind(row.overnight_gap)
-                .bind(row.gap_pct)
-                .bind(row.volume_roc_5)
-                .bind(row.volume_spike)
-                .bind(row.price_roc_5)
-                .bind(row.price_roc_10)
-                .bind(row.price_roc_20)
-                .bind(row.hist_volatility_20)
-                .bind(row.is_doji)
-                .bind(row.is_hammer)
-                .bind(row.is_shooting_star)
-                .bind(row.consecutive_days)
-                .bind(row.index_csi300_pct_chg)
-                .bind(row.index_csi300_vs_ma5_pct)
-                .bind(row.index_csi300_vs_ma20_pct)
-                .bind(row.index_chinext_pct_chg)
-                .bind(row.index_chinext_vs_ma5_pct)
-                .bind(row.index_chinext_vs_ma20_pct)
-                .bind(row.index_xin9_pct_chg)
-                .bind(row.index_xin9_vs_ma5_pct)
-                .bind(row.index_xin9_vs_ma20_pct)
-                .bind(row.index_hsi_pct_chg)
-                .bind(row.index_hsi_vs_ma5_pct)
-                .bind(row.index_hsi_vs_ma20_pct)
-                .bind(row.fx_usdcnh_pct_chg)
-                .bind(row.fx_usdcnh_vs_ma5_pct)
-                .bind(row.fx_usdcnh_vs_ma20_pct)
-                .bind(row.net_mf_vol)
-                .bind(row.net_mf_amount)
-                .bind(row.smart_money_ratio)
-                .bind(row.large_order_flow)
-                .bind(row.industry_avg_return)
-                .bind(row.stock_vs_industry)
-                .bind(row.industry_momentum_5d)
-                .bind(row.industry_momentum)
-                .bind(row.turnover_rate)
-                .bind(row.turnover_rate_f)
-                .bind(row.pe)
-                .bind(row.pe_ttm)
-                .bind(row.pb)
-                .bind(row.ps)
-                .bind(row.ps_ttm)
-                .bind(row.dv_ratio)
-                .bind(row.dv_ttm)
-                .bind(row.total_share)
-                .bind(row.float_share)
-                .bind(row.free_share)
-                .bind(row.total_mv)
-                .bind(row.circ_mv)
-                .bind(row.vol_percentile)
-                .bind(row.high_vol_regime)
-                .bind(row.next_day_return)
-                .bind(row.next_day_direction)
-                .bind(row.next_3day_return)
-                .bind(row.next_3day_direction)
-                .bind(row.pe_percentile_52w)
-                .bind(row.sector_momentum_vs_market)
-                .bind(row.volume_accel_5d)
-                .bind(row.price_vs_52w_high)
-                .bind(row.consecutive_up_days);
+            for col in insert_columns.iter() {
+                match *col {
+                    "ts_code" => { query = query.bind(&row.ts_code); }
+                    "trade_date" => { query = query.bind(&row.trade_date); }
+                    "industry" => { query = query.bind(&row.industry); }
+                    "act_ent_type" => { query = query.bind(&row.act_ent_type); }
+                    "volume" => { query = query.bind(row.volume); }
+                    "amount" => { query = query.bind(row.amount); }
+                    "month" => { query = query.bind(row.month); }
+                    "weekday" => { query = query.bind(row.weekday); }
+                    "quarter" => { query = query.bind(row.quarter); }
+                    "week_no" => { query = query.bind(row.week_no); }
+                    "open_pct" => { query = query.bind(row.open_pct); }
+                    "high_pct" => { query = query.bind(row.high_pct); }
+                    "low_pct" => { query = query.bind(row.low_pct); }
+                    "close_pct" => { query = query.bind(row.close_pct); }
+                    "high_from_open_pct" => { query = query.bind(row.high_from_open_pct); }
+                    "low_from_open_pct" => { query = query.bind(row.low_from_open_pct); }
+                    "close_from_open_pct" => { query = query.bind(row.close_from_open_pct); }
+                    "intraday_range_pct" => { query = query.bind(row.intraday_range_pct); }
+                    "close_position_in_range" => { query = query.bind(row.close_position_in_range); }
+                    "sma_5" => { query = query.bind(row.sma_5); }
+                    "sma_10" => { query = query.bind(row.sma_10); }
+                    "sma_20" => { query = query.bind(row.sma_20); }
+                    "macd_line" => { query = query.bind(row.macd_line); }
+                    "macd_signal" => { query = query.bind(row.macd_signal); }
+                    "macd_histogram" => { query = query.bind(row.macd_histogram); }
+                    "macd_weekly_line" => { query = query.bind(row.macd_weekly_line); }
+                    "macd_weekly_signal" => { query = query.bind(row.macd_weekly_signal); }
+                    "macd_monthly_line" => { query = query.bind(row.macd_monthly_line); }
+                    "macd_monthly_signal" => { query = query.bind(row.macd_monthly_signal); }
+                    "rsi_14" => { query = query.bind(row.rsi_14); }
+                    "kdj_k" => { query = query.bind(row.kdj_k); }
+                    "kdj_d" => { query = query.bind(row.kdj_d); }
+                    "kdj_j" => { query = query.bind(row.kdj_j); }
+                    "bb_upper" => { query = query.bind(row.bb_upper); }
+                    "bb_middle" => { query = query.bind(row.bb_middle); }
+                    "bb_lower" => { query = query.bind(row.bb_lower); }
+                    "bb_bandwidth" => { query = query.bind(row.bb_bandwidth); }
+                    "bb_percent_b" => { query = query.bind(row.bb_percent_b); }
+                    "atr" => { query = query.bind(row.atr); }
+                    "volatility_5" => { query = query.bind(row.volatility_5); }
+                    "volatility_20" => { query = query.bind(row.volatility_20); }
+                    "asi" => { query = query.bind(row.asi); }
+                    "obv" => { query = query.bind(row.obv); }
+                    "volume_ratio" => { query = query.bind(row.volume_ratio); }
+                    "price_momentum_5" => { query = query.bind(row.price_momentum_5); }
+                    "price_momentum_10" => { query = query.bind(row.price_momentum_10); }
+                    "price_momentum_20" => { query = query.bind(row.price_momentum_20); }
+                    "price_position_52w" => { query = query.bind(row.price_position_52w); }
+                    "body_size" => { query = query.bind(row.body_size); }
+                    "upper_shadow" => { query = query.bind(row.upper_shadow); }
+                    "lower_shadow" => { query = query.bind(row.lower_shadow); }
+                    "trend_strength" => { query = query.bind(row.trend_strength); }
+                    "adx_14" => { query = query.bind(row.adx_14); }
+                    "vwap_distance_pct" => { query = query.bind(row.vwap_distance_pct); }
+                    "cmf_20" => { query = query.bind(row.cmf_20); }
+                    "aroon_up_25" => { query = query.bind(row.aroon_up_25); }
+                    "return_lag_1" => { query = query.bind(row.return_lag_1); }
+                    "return_lag_2" => { query = query.bind(row.return_lag_2); }
+                    "return_lag_3" => { query = query.bind(row.return_lag_3); }
+                    "overnight_gap" => { query = query.bind(row.overnight_gap); }
+                    "gap_pct" => { query = query.bind(row.gap_pct); }
+                    "volume_roc_5" => { query = query.bind(row.volume_roc_5); }
+                    "volume_spike" => { query = query.bind(row.volume_spike); }
+                    "price_roc_5" => { query = query.bind(row.price_roc_5); }
+                    "price_roc_10" => { query = query.bind(row.price_roc_10); }
+                    "price_roc_20" => { query = query.bind(row.price_roc_20); }
+                    "hist_volatility_20" => { query = query.bind(row.hist_volatility_20); }
+                    "is_doji" => { query = query.bind(row.is_doji); }
+                    "is_hammer" => { query = query.bind(row.is_hammer); }
+                    "is_shooting_star" => { query = query.bind(row.is_shooting_star); }
+                    "consecutive_days" => { query = query.bind(row.consecutive_days); }
+                    "index_csi300_pct_chg" => { query = query.bind(row.index_csi300_pct_chg); }
+                    "index_csi300_vs_ma5_pct" => { query = query.bind(row.index_csi300_vs_ma5_pct); }
+                    "index_csi300_vs_ma20_pct" => { query = query.bind(row.index_csi300_vs_ma20_pct); }
+                    "index_chinext_pct_chg" => { query = query.bind(row.index_chinext_pct_chg); }
+                    "index_chinext_vs_ma5_pct" => { query = query.bind(row.index_chinext_vs_ma5_pct); }
+                    "index_chinext_vs_ma20_pct" => { query = query.bind(row.index_chinext_vs_ma20_pct); }
+                    "index_xin9_pct_chg" => { query = query.bind(row.index_xin9_pct_chg); }
+                    "index_xin9_vs_ma5_pct" => { query = query.bind(row.index_xin9_vs_ma5_pct); }
+                    "index_xin9_vs_ma20_pct" => { query = query.bind(row.index_xin9_vs_ma20_pct); }
+                    "index_hsi_pct_chg" => { query = query.bind(row.index_hsi_pct_chg); }
+                    "index_hsi_vs_ma5_pct" => { query = query.bind(row.index_hsi_vs_ma5_pct); }
+                    "index_hsi_vs_ma20_pct" => { query = query.bind(row.index_hsi_vs_ma20_pct); }
+                    "fx_usdcnh_pct_chg" => { query = query.bind(row.fx_usdcnh_pct_chg); }
+                    "fx_usdcnh_vs_ma5_pct" => { query = query.bind(row.fx_usdcnh_vs_ma5_pct); }
+                    "fx_usdcnh_vs_ma20_pct" => { query = query.bind(row.fx_usdcnh_vs_ma20_pct); }
+                    "net_mf_vol" => { query = query.bind(row.net_mf_vol); }
+                    "net_mf_amount" => { query = query.bind(row.net_mf_amount); }
+                    "smart_money_ratio" => { query = query.bind(row.smart_money_ratio); }
+                    "large_order_flow" => { query = query.bind(row.large_order_flow); }
+                    "industry_avg_return" => { query = query.bind(row.industry_avg_return); }
+                    "stock_vs_industry" => { query = query.bind(row.stock_vs_industry); }
+                    "industry_momentum_5d" => { query = query.bind(row.industry_momentum_5d); }
+                    "industry_momentum" => { query = query.bind(row.industry_momentum); }
+                    "turnover_rate" => { query = query.bind(row.turnover_rate); }
+                    "turnover_rate_f" => { query = query.bind(row.turnover_rate_f); }
+                    "pe" => { query = query.bind(row.pe); }
+                    "pe_ttm" => { query = query.bind(row.pe_ttm); }
+                    "pb" => { query = query.bind(row.pb); }
+                    "dv_ratio" => { query = query.bind(row.dv_ratio); }
+                    "dv_ttm" => { query = query.bind(row.dv_ttm); }
+                    "total_share" => { query = query.bind(row.total_share); }
+                    "float_share" => { query = query.bind(row.float_share); }
+                    "free_share" => { query = query.bind(row.free_share); }
+                    "industry_emb_0" => { query = query.bind(row.industry_emb[0]); }
+                    "industry_emb_1" => { query = query.bind(row.industry_emb[1]); }
+                    "industry_emb_2" => { query = query.bind(row.industry_emb[2]); }
+                    "industry_emb_3" => { query = query.bind(row.industry_emb[3]); }
+                    "industry_emb_4" => { query = query.bind(row.industry_emb[4]); }
+                    "industry_emb_5" => { query = query.bind(row.industry_emb[5]); }
+                    "industry_emb_6" => { query = query.bind(row.industry_emb[6]); }
+                    "industry_emb_7" => { query = query.bind(row.industry_emb[7]); }
+                    "act_ent_type_emb_0" => { query = query.bind(row.act_ent_type_emb[0]); }
+                    "act_ent_type_emb_1" => { query = query.bind(row.act_ent_type_emb[1]); }
+                    "act_ent_type_emb_2" => { query = query.bind(row.act_ent_type_emb[2]); }
+                    "act_ent_type_emb_3" => { query = query.bind(row.act_ent_type_emb[3]); }
+                    "act_ent_type_emb_4" => { query = query.bind(row.act_ent_type_emb[4]); }
+                    "act_ent_type_emb_5" => { query = query.bind(row.act_ent_type_emb[5]); }
+                    "act_ent_type_emb_6" => { query = query.bind(row.act_ent_type_emb[6]); }
+                    "act_ent_type_emb_7" => { query = query.bind(row.act_ent_type_emb[7]); }
+                    "close_position_in_range_imputed" => { query = query.bind(row.close_position_in_range_imputed); }
+                    "macd_monthly_line_imputed" => { query = query.bind(row.macd_monthly_line_imputed); }
+                    "macd_monthly_signal_imputed" => { query = query.bind(row.macd_monthly_signal_imputed); }
+                    "vol_percentile" => { query = query.bind(row.vol_percentile); }
+                    "high_vol_regime" => { query = query.bind(row.high_vol_regime); }
+                    "next_day_return" => { query = query.bind(row.next_day_return); }
+                    "next_day_direction" => { query = query.bind(row.next_day_direction); }
+                    "next_3day_return" => { query = query.bind(row.next_3day_return); }
+                    "next_3day_direction" => { query = query.bind(row.next_3day_direction); }
+                    "pe_percentile_52w" => { query = query.bind(row.pe_percentile_52w); }
+                    "sector_momentum_vs_market" => { query = query.bind(row.sector_momentum_vs_market); }
+                    "volume_accel_5d" => { query = query.bind(row.volume_accel_5d); }
+                    "price_vs_52w_high" => { query = query.bind(row.price_vs_52w_high); }
+                    "consecutive_up_days" => { query = query.bind(row.consecutive_up_days); }
+                    _ => { /* unknown/removed column; skip binding */ }
+                }
+            }
         }
 
         query.execute(&mut *tx).await?;
@@ -1560,7 +1675,806 @@ async fn prefetch_industry_performance(
     map
 } 
 
+fn hash_to_embedding_fixed(s: &str, dim: usize, seed: u64) -> Vec<f64> {
+    use std::hash::{Hasher, Hash};
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    let mut state = hasher.finish().wrapping_add(seed);
+    let mut out: Vec<f64> = Vec::with_capacity(dim);
+    for _ in 0..dim {
+        // splitmix64 inspired
+        state = state.wrapping_add(0x9e3779b97f4a7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        z = z ^ (z >> 31);
+        let v = (z as f64) / (u64::MAX as f64);
+        out.push(v * 2.0 - 1.0);
+    }
+    // normalize
+    let norm: f64 = out.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if norm > 0.0 {
+        for x in &mut out {
+            *x /= norm;
+        }
+    }
+    out
+}
+
+fn get_ml_create_table_sql() -> &'static str {
+    r#"
+    CREATE TABLE IF NOT EXISTS ml_training_dataset (
+        ts_code TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        PRIMARY KEY (ts_code, trade_date),
+        industry TEXT,
+        act_ent_type TEXT,
+        volume DOUBLE PRECISION,
+        amount DOUBLE PRECISION,
+        month SMALLINT,
+        weekday SMALLINT,
+        quarter SMALLINT,
+        week_no SMALLINT,
+        open_pct DOUBLE PRECISION,
+        high_pct DOUBLE PRECISION,
+        low_pct DOUBLE PRECISION,
+        close_pct DOUBLE PRECISION,
+        high_from_open_pct DOUBLE PRECISION,
+        low_from_open_pct DOUBLE PRECISION,
+        close_from_open_pct DOUBLE PRECISION,
+        intraday_range_pct DOUBLE PRECISION,
+        close_position_in_range DOUBLE PRECISION,
+        sma_5 DOUBLE PRECISION,
+        sma_10 DOUBLE PRECISION,
+        sma_20 DOUBLE PRECISION,
+        macd_line DOUBLE PRECISION,
+        macd_signal DOUBLE PRECISION,
+        macd_histogram DOUBLE PRECISION,
+        macd_weekly_line DOUBLE PRECISION,
+        macd_weekly_signal DOUBLE PRECISION,
+        macd_monthly_line DOUBLE PRECISION,
+        macd_monthly_signal DOUBLE PRECISION,
+        rsi_14 DOUBLE PRECISION,
+        kdj_k DOUBLE PRECISION,
+        kdj_d DOUBLE PRECISION,
+        kdj_j DOUBLE PRECISION,
+        bb_upper DOUBLE PRECISION,
+        bb_middle DOUBLE PRECISION,
+        bb_lower DOUBLE PRECISION,
+        bb_bandwidth DOUBLE PRECISION,
+        bb_percent_b DOUBLE PRECISION,
+        atr DOUBLE PRECISION,
+        volatility_5 DOUBLE PRECISION,
+        volatility_20 DOUBLE PRECISION,
+        asi DOUBLE PRECISION,
+        obv DOUBLE PRECISION,
+        volume_ratio DOUBLE PRECISION,
+        price_momentum_5 DOUBLE PRECISION,
+        price_momentum_10 DOUBLE PRECISION,
+        price_momentum_20 DOUBLE PRECISION,
+        price_position_52w DOUBLE PRECISION,
+        body_size DOUBLE PRECISION,
+        upper_shadow DOUBLE PRECISION,
+        lower_shadow DOUBLE PRECISION,
+        trend_strength DOUBLE PRECISION,
+        adx_14 DOUBLE PRECISION,
+        vwap_distance_pct DOUBLE PRECISION,
+        cmf_20 DOUBLE PRECISION,
+        aroon_up_25 DOUBLE PRECISION,
+        return_lag_1 DOUBLE PRECISION,
+        return_lag_2 DOUBLE PRECISION,
+        return_lag_3 DOUBLE PRECISION,
+        overnight_gap DOUBLE PRECISION,
+        gap_pct DOUBLE PRECISION,
+        volume_roc_5 DOUBLE PRECISION,
+        volume_spike BOOLEAN,
+        price_roc_5 DOUBLE PRECISION,
+        price_roc_10 DOUBLE PRECISION,
+        price_roc_20 DOUBLE PRECISION,
+        hist_volatility_20 DOUBLE PRECISION,
+        is_doji BOOLEAN,
+        is_hammer BOOLEAN,
+        is_shooting_star BOOLEAN,
+        consecutive_days INTEGER,
+        index_csi300_pct_chg DOUBLE PRECISION,
+        index_csi300_vs_ma5_pct DOUBLE PRECISION,
+        index_csi300_vs_ma20_pct DOUBLE PRECISION,
+        index_chinext_pct_chg DOUBLE PRECISION,
+        index_chinext_vs_ma5_pct DOUBLE PRECISION,
+        index_chinext_vs_ma20_pct DOUBLE PRECISION,
+        index_xin9_pct_chg DOUBLE PRECISION,
+        index_xin9_vs_ma5_pct DOUBLE PRECISION,
+        index_xin9_vs_ma20_pct DOUBLE PRECISION,
+        index_hsi_pct_chg DOUBLE PRECISION,
+        index_hsi_vs_ma5_pct DOUBLE PRECISION,
+        index_hsi_vs_ma20_pct DOUBLE PRECISION,
+        -- DailyBasic columns (excluding close)
+        turnover_rate DOUBLE PRECISION,
+        turnover_rate_f DOUBLE PRECISION,
+        pe DOUBLE PRECISION,
+        pe_ttm DOUBLE PRECISION,
+        pb DOUBLE PRECISION,
+        dv_ratio DOUBLE PRECISION,
+        dv_ttm DOUBLE PRECISION,
+        total_share DOUBLE PRECISION,
+        float_share DOUBLE PRECISION,
+        free_share DOUBLE PRECISION,
+        -- Embeddings for categorical features (industry, act_ent_type) - 8 dims each
+        industry_emb_0 DOUBLE PRECISION,
+        industry_emb_1 DOUBLE PRECISION,
+        industry_emb_2 DOUBLE PRECISION,
+        industry_emb_3 DOUBLE PRECISION,
+        industry_emb_4 DOUBLE PRECISION,
+        industry_emb_5 DOUBLE PRECISION,
+        industry_emb_6 DOUBLE PRECISION,
+        industry_emb_7 DOUBLE PRECISION,
+        act_ent_type_emb_0 DOUBLE PRECISION,
+        act_ent_type_emb_1 DOUBLE PRECISION,
+        act_ent_type_emb_2 DOUBLE PRECISION,
+        act_ent_type_emb_3 DOUBLE PRECISION,
+        act_ent_type_emb_4 DOUBLE PRECISION,
+        act_ent_type_emb_5 DOUBLE PRECISION,
+        act_ent_type_emb_6 DOUBLE PRECISION,
+        act_ent_type_emb_7 DOUBLE PRECISION,
+        -- Imputation flags for fields that were sometimes missing
+        close_position_in_range_imputed BOOLEAN,
+        macd_monthly_line_imputed BOOLEAN,
+        macd_monthly_signal_imputed BOOLEAN,
+        vol_percentile DOUBLE PRECISION,
+        high_vol_regime SMALLINT,
+        next_day_return DOUBLE PRECISION,
+        next_day_direction SMALLINT,
+        next_3day_return DOUBLE PRECISION,
+        next_3day_direction SMALLINT
+    );
+    "#
+}
+
 // --- Add these stubs near the top of your file ---
+
+fn median(v: &mut Vec<f64>) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let m = v.len() / 2;
+    if v.len() % 2 == 0 {
+        (v[m - 1] + v[m]) / 2.0
+    } else {
+        v[m]
+    }
+}
+
+fn pearson_corr(a: &[f64], b: &[f64]) -> Option<f64> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+    let n = a.len() as f64;
+    let mean_a = a.iter().sum::<f64>() / n;
+    let mean_b = b.iter().sum::<f64>() / n;
+    let mut num = 0.0_f64;
+    let mut den_a = 0.0_f64;
+    let mut den_b = 0.0_f64;
+    for i in 0..a.len() {
+        let da = a[i] - mean_a;
+        let db = b[i] - mean_b;
+        num += da * db;
+        den_a += da * da;
+        den_b += db * db;
+    }
+    if den_a == 0.0 || den_b == 0.0 {
+        return None;
+    }
+    Some(num / den_a.sqrt() / den_b.sqrt())
+}
+
+fn invert_matrix(mut m: Vec<Vec<f64>>) -> Option<Vec<Vec<f64>>> {
+    let n = m.len();
+    // build augmented matrix [m | I]
+    let mut aug = vec![vec![0.0; 2 * n]; n];
+    for i in 0..n {
+        if m[i].len() != n { return None; }
+        for j in 0..n { aug[i][j] = m[i][j]; }
+        aug[i][n + i] = 1.0;
+    }
+    // Gauss-Jordan elimination
+    for i in 0..n {
+        // find pivot
+        let mut pivot = i;
+        for r in i..n {
+            if aug[r][i].abs() > aug[pivot][i].abs() { pivot = r; }
+        }
+        if aug[pivot][i].abs() < 1e-12 { return None; } // singular
+        if pivot != i { aug.swap(i, pivot); }
+        let diag = aug[i][i];
+        for c in 0..2*n { aug[i][c] /= diag; }
+        for r in 0..n {
+            if r == i { continue; }
+            let factor = aug[r][i];
+            if factor.abs() < 1e-15 { continue; }
+            for c in i..2*n {
+                aug[r][c] -= factor * aug[i][c];
+            }
+        }
+    }
+    let mut inv = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n { inv[i][j] = aug[i][n + j]; }
+    }
+    Some(inv)
+}
+
+async fn compute_vif_and_drop_columns(pool: &Pool<Postgres>, rows: &[FeatureRow], execute_drops: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
+    use std::fs::File;
+    use std::io::Write;
+
+    if rows.is_empty() {
+        println!("No rows to compute VIF on.");
+        return Ok(())
+    }
+
+    // Numeric feature list (exclude embeddings, labels, booleans, and IDs)
+    const NUMERIC_COLS: &[&str] = &[
+        "volume","amount","open_pct","high_pct","low_pct","close_pct","high_from_open_pct","low_from_open_pct","close_from_open_pct",
+        "intraday_range_pct","close_position_in_range","sma_5","sma_10","sma_20",
+        "macd_line","macd_signal","macd_histogram","macd_weekly_line","macd_weekly_signal","macd_monthly_line","macd_monthly_signal",
+        "rsi_14","kdj_k","kdj_d","kdj_j","bb_upper","bb_middle","bb_lower","bb_bandwidth","bb_percent_b","atr","volatility_5","volatility_20",
+        "asi","obv","volume_ratio","price_momentum_5","price_momentum_10","price_momentum_20","price_position_52w","body_size","upper_shadow","lower_shadow",
+        "trend_strength","adx_14","vwap_distance_pct","cmf_20","aroon_up_25","return_lag_1","return_lag_2","return_lag_3",
+        "overnight_gap","gap_pct","volume_roc_5","price_roc_5","price_roc_10","price_roc_20","hist_volatility_20","consecutive_days",
+        "index_csi300_pct_chg","index_csi300_vs_ma5_pct","index_csi300_vs_ma20_pct","index_chinext_pct_chg","index_chinext_vs_ma5_pct","index_chinext_vs_ma20_pct",
+        "index_xin9_pct_chg","index_xin9_vs_ma5_pct","index_xin9_vs_ma20_pct","index_hsi_pct_chg","index_hsi_vs_ma5_pct","index_hsi_vs_ma20_pct",
+        "fx_usdcnh_pct_chg","fx_usdcnh_vs_ma5_pct","fx_usdcnh_vs_ma20_pct","net_mf_vol","net_mf_amount","smart_money_ratio","large_order_flow",
+        "industry_avg_return","stock_vs_industry","industry_momentum_5d","industry_momentum","turnover_rate","turnover_rate_f","pe","pe_ttm","pb",
+        "dv_ratio","dv_ttm","total_share","float_share","free_share","vol_percentile","pe_percentile_52w","sector_momentum_vs_market",
+        "volume_accel_5d","price_vs_52w_high","consecutive_up_days"
+    ];
+
+    let n_features = NUMERIC_COLS.len();
+    let n_rows = rows.len();
+
+    // Build column vectors with Option<f64> -> impute median later
+    let mut data: Vec<Vec<f64>> = vec![Vec::with_capacity(n_rows); n_features];
+
+    for r in rows {
+        for (i, col) in NUMERIC_COLS.iter().enumerate() {
+            let v = match *col {
+                "volume" => Some(r.volume),
+                "amount" => r.amount,
+                "open_pct" => r.open_pct,
+                "high_pct" => r.high_pct,
+                "low_pct" => r.low_pct,
+                "close_pct" => r.close_pct,
+                "high_from_open_pct" => r.high_from_open_pct,
+                "low_from_open_pct" => r.low_from_open_pct,
+                "close_from_open_pct" => r.close_from_open_pct,
+                "intraday_range_pct" => r.intraday_range_pct,
+                "close_position_in_range" => r.close_position_in_range,
+                "sma_5" => r.sma_5,
+                "sma_10" => r.sma_10,
+                "sma_20" => r.sma_20,
+                "macd_line" => r.macd_line,
+                "macd_signal" => r.macd_signal,
+                "macd_histogram" => r.macd_histogram,
+                "macd_weekly_line" => r.macd_weekly_line,
+                "macd_weekly_signal" => r.macd_weekly_signal,
+                "macd_monthly_line" => r.macd_monthly_line,
+                "macd_monthly_signal" => r.macd_monthly_signal,
+                "rsi_14" => r.rsi_14,
+                "kdj_k" => r.kdj_k,
+                "kdj_d" => r.kdj_d,
+                "kdj_j" => r.kdj_j,
+                "bb_upper" => r.bb_upper,
+                "bb_middle" => r.bb_middle,
+                "bb_lower" => r.bb_lower,
+                "bb_bandwidth" => r.bb_bandwidth,
+                "bb_percent_b" => r.bb_percent_b,
+                "atr" => r.atr,
+                "volatility_5" => r.volatility_5,
+                "volatility_20" => r.volatility_20,
+                "asi" => r.asi,
+                "obv" => r.obv,
+                "volume_ratio" => r.volume_ratio,
+                "price_momentum_5" => r.price_momentum_5,
+                "price_momentum_10" => r.price_momentum_10,
+                "price_momentum_20" => r.price_momentum_20,
+                "price_position_52w" => r.price_position_52w,
+                "body_size" => r.body_size,
+                "upper_shadow" => r.upper_shadow,
+                "lower_shadow" => r.lower_shadow,
+                "trend_strength" => r.trend_strength,
+                "adx_14" => r.adx_14,
+                "vwap_distance_pct" => r.vwap_distance_pct,
+                "cmf_20" => r.cmf_20,
+                "aroon_up_25" => r.aroon_up_25,
+                "return_lag_1" => r.return_lag_1,
+                "return_lag_2" => r.return_lag_2,
+                "return_lag_3" => r.return_lag_3,
+                "overnight_gap" => r.overnight_gap,
+                "gap_pct" => r.gap_pct,
+                "volume_roc_5" => r.volume_roc_5,
+                "price_roc_5" => r.price_roc_5,
+                "price_roc_10" => r.price_roc_10,
+                "price_roc_20" => r.price_roc_20,
+                "hist_volatility_20" => r.hist_volatility_20,
+                "consecutive_days" => r.consecutive_days.map(|v| v as f64),
+                "index_csi300_pct_chg" => r.index_csi300_pct_chg,
+                "index_csi300_vs_ma5_pct" => r.index_csi300_vs_ma5_pct,
+                "index_csi300_vs_ma20_pct" => r.index_csi300_vs_ma20_pct,
+                "index_chinext_pct_chg" => r.index_chinext_pct_chg,
+                "index_chinext_vs_ma5_pct" => r.index_chinext_vs_ma5_pct,
+                "index_chinext_vs_ma20_pct" => r.index_chinext_vs_ma20_pct,
+                "index_xin9_pct_chg" => r.index_xin9_pct_chg,
+                "index_xin9_vs_ma5_pct" => r.index_xin9_vs_ma5_pct,
+                "index_xin9_vs_ma20_pct" => r.index_xin9_vs_ma20_pct,
+                "index_hsi_pct_chg" => r.index_hsi_pct_chg,
+                "index_hsi_vs_ma5_pct" => r.index_hsi_vs_ma5_pct,
+                "index_hsi_vs_ma20_pct" => r.index_hsi_vs_ma20_pct,
+                "fx_usdcnh_pct_chg" => r.fx_usdcnh_pct_chg,
+                "fx_usdcnh_vs_ma5_pct" => r.fx_usdcnh_vs_ma5_pct,
+                "fx_usdcnh_vs_ma20_pct" => r.fx_usdcnh_vs_ma20_pct,
+                "net_mf_vol" => r.net_mf_vol,
+                "net_mf_amount" => r.net_mf_amount,
+                "smart_money_ratio" => r.smart_money_ratio,
+                "large_order_flow" => r.large_order_flow,
+                "industry_avg_return" => r.industry_avg_return,
+                "stock_vs_industry" => r.stock_vs_industry,
+                "industry_momentum_5d" => r.industry_momentum_5d,
+                "industry_momentum" => r.industry_momentum,
+                "turnover_rate" => r.turnover_rate,
+                "turnover_rate_f" => r.turnover_rate_f,
+                "pe" => r.pe,
+                "pe_ttm" => r.pe_ttm,
+                "pb" => r.pb,
+                "dv_ratio" => r.dv_ratio,
+                "dv_ttm" => r.dv_ttm,
+                "total_share" => r.total_share,
+                "float_share" => r.float_share,
+                "free_share" => r.free_share,
+                "vol_percentile" => r.vol_percentile,
+                "pe_percentile_52w" => r.pe_percentile_52w,
+                "sector_momentum_vs_market" => r.sector_momentum_vs_market,
+                "volume_accel_5d" => r.volume_accel_5d,
+                "price_vs_52w_high" => r.price_vs_52w_high,
+                "consecutive_up_days" => r.consecutive_up_days.map(|v| v as f64),
+                _ => None,
+            };
+            data[i].push(v.unwrap_or(f64::NAN));
+        }
+    }
+
+    // Impute medians for NaNs
+    for col in data.iter_mut() {
+        let mut vals: Vec<f64> = col.iter().cloned().filter(|x| x.is_finite()).collect();
+        let med = median(&mut vals);
+        for x in col.iter_mut() { if !x.is_finite() { *x = med; } }
+    }
+
+    // If user requested log1p/standardize, we will expose helpers to transform the dataset
+
+
+    // Build correlation matrix
+    let mut cor: Vec<Vec<f64>> = vec![vec![0.0; n_features]; n_features];
+    for i in 0..n_features {
+        for j in i..n_features {
+            if i == j { cor[i][j] = 1.0; continue; }
+            let c = pearson_corr(&data[i], &data[j]).unwrap_or(0.0);
+            cor[i][j] = c;
+            cor[j][i] = c;
+        }
+    }
+
+    // Invert correlation matrix
+    let inv = match invert_matrix(cor.clone()) {
+        Some(m) => m,
+        None => {
+            eprintln!("⚠️  Correlation matrix singular; cannot invert for VIF. No columns dropped.");
+            // Save report and return
+            let mut f = File::create("artifacts/vif_report.csv")?;
+            writeln!(f, "feature,vif")?;
+            return Ok(());
+        }
+    };
+
+    // Compute VIFs as diagonal elements
+    let mut vifs: Vec<(String, f64)> = Vec::with_capacity(n_features);
+    for i in 0..n_features {
+        let vif = inv[i][i];
+        vifs.push((NUMERIC_COLS[i].to_string(), vif));
+    }
+
+    // Write VIF report
+    std::fs::create_dir_all("artifacts")?;
+    let mut f = File::create("artifacts/vif_report.csv")?;
+    writeln!(f, "feature,vif")?;
+    for (feat, v) in vifs.iter() {
+        writeln!(f, "{},{}", feat, v)?;
+    }
+
+    // Identify features to drop (VIF > 10 or non-finite)
+    let drop_feats: Vec<&String> = vifs.iter().filter(|(_f,v)| !v.is_finite() || *v > 10.0).map(|(f,_v)| f).collect();
+    if drop_feats.is_empty() {
+        println!("✅ No high-VIF features detected (all <= 10). Report saved to artifacts/vif_report.csv");
+        return Ok(());
+    }
+
+    println!("⚠️  Dropping {} high-VIF features: {:?}", drop_feats.len(), drop_feats);
+    // Create SQL file with ALTERs
+    let mut sql_file = File::create("artifacts/vif_drop.sql")?;
+    for fdrop in drop_feats.iter() {
+        let stmt = format!("ALTER TABLE ml_training_dataset DROP COLUMN IF EXISTS {};", fdrop);
+        writeln!(sql_file, "{}", stmt)?;
+        // Execute drop only when requested (avoid schema changes during dry-run)
+        if execute_drops {
+            sqlx::query(&stmt).execute(pool).await.ok();
+        }
+    }
+    println!("✅ Dropped high-VIF columns and saved ALTER statements to artifacts/vif_drop.sql");
+    Ok(())
+}
+
+// Apply log1p and/or standard scaling to a collected set of FeatureRows in-place.
+// - `apply_log1p`: apply log1p to selected positive-skewed features (only if > 0)
+// - `standardize`: z-score numeric features across the dataset (after median imputation and optional log1p)
+fn apply_log1p_and_standardize(rows: &mut [FeatureRow], apply_log1p: bool, standardize: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
+    use std::fs::File;
+    use std::io::Write;
+
+    if rows.is_empty() {
+        // No collected rows (e.g., transforms requested but rows were inserted directly per-stock).
+        // Still create artifacts so downstream tooling can reliably find parameter files.
+        std::fs::create_dir_all("artifacts")?;
+        // Write an (empty) winsor params file with header for reproducibility / inspection
+        let mut wf = File::create("artifacts/winsor_params.csv")?;
+        writeln!(wf, "feature,lo,hi")?;
+        // If standardization was requested, produce an empty scale params header so users can inspect structure
+        if standardize {
+            let mut f = File::create("artifacts/scale_params.csv")?;
+            writeln!(f, "feature,applied_log1p,mean,std")?;
+        }
+
+        return Ok(());
+    }
+
+    const NUMERIC_COLS: &[&str] = &[
+        "volume","amount","open_pct","high_pct","low_pct","close_pct","high_from_open_pct","low_from_open_pct","close_from_open_pct",
+        "intraday_range_pct","close_position_in_range","sma_5","sma_10","sma_20",
+        "macd_line","macd_signal","macd_histogram","macd_weekly_line","macd_weekly_signal","macd_monthly_line","macd_monthly_signal",
+        "rsi_14","kdj_k","kdj_d","kdj_j","bb_upper","bb_middle","bb_lower","bb_bandwidth","bb_percent_b","atr","volatility_5","volatility_20",
+        "asi","obv","volume_ratio","price_momentum_5","price_momentum_10","price_momentum_20","price_position_52w","body_size","upper_shadow","lower_shadow",
+        "trend_strength","adx_14","vwap_distance_pct","cmf_20","aroon_up_25","return_lag_1","return_lag_2","return_lag_3",
+        "overnight_gap","gap_pct","volume_roc_5","price_roc_5","price_roc_10","price_roc_20","hist_volatility_20","consecutive_days",
+        "index_csi300_pct_chg","index_csi300_vs_ma5_pct","index_csi300_vs_ma20_pct","index_chinext_pct_chg","index_chinext_vs_ma5_pct","index_chinext_vs_ma20_pct",
+        "index_xin9_pct_chg","index_xin9_vs_ma5_pct","index_xin9_vs_ma20_pct","index_hsi_pct_chg","index_hsi_vs_ma5_pct","index_hsi_vs_ma20_pct",
+        "fx_usdcnh_pct_chg","fx_usdcnh_vs_ma5_pct","fx_usdcnh_vs_ma20_pct","net_mf_vol","net_mf_amount","smart_money_ratio","large_order_flow",
+        "industry_avg_return","stock_vs_industry","industry_momentum_5d","industry_momentum","turnover_rate","turnover_rate_f","pe","pe_ttm","pb",
+        "dv_ratio","dv_ttm","total_share","float_share","free_share","vol_percentile","pe_percentile_52w","sector_momentum_vs_market",
+        "volume_accel_5d","price_vs_52w_high","consecutive_up_days"
+    ];
+
+    // conservative set of positive-skewed features to apply log1p to
+    const LOG1P_COLS: &[&str] = &[
+        "volume","amount","turnover_rate","total_share","float_share","free_share",
+        "net_mf_vol","net_mf_amount","large_order_flow","volume_accel_5d","volatility_20","atr","pe","pe_ttm","pb"
+    ];
+
+    let n_features = NUMERIC_COLS.len();
+    let n_rows = rows.len();
+
+    let mut data: Vec<Vec<f64>> = vec![Vec::with_capacity(n_rows); n_features];
+
+    for r in rows.iter() {
+        for (i, col) in NUMERIC_COLS.iter().enumerate() {
+            let v = match *col {
+                "volume" => Some(r.volume),
+                "amount" => r.amount,
+                "open_pct" => r.open_pct,
+                "high_pct" => r.high_pct,
+                "low_pct" => r.low_pct,
+                "close_pct" => r.close_pct,
+                "high_from_open_pct" => r.high_from_open_pct,
+                "low_from_open_pct" => r.low_from_open_pct,
+                "close_from_open_pct" => r.close_from_open_pct,
+                "intraday_range_pct" => r.intraday_range_pct,
+                "close_position_in_range" => r.close_position_in_range,
+                "sma_5" => r.sma_5,
+                "sma_10" => r.sma_10,
+                "sma_20" => r.sma_20,
+                "macd_line" => r.macd_line,
+                "macd_signal" => r.macd_signal,
+                "macd_histogram" => r.macd_histogram,
+                "macd_weekly_line" => r.macd_weekly_line,
+                "macd_weekly_signal" => r.macd_weekly_signal,
+                "macd_monthly_line" => r.macd_monthly_line,
+                "macd_monthly_signal" => r.macd_monthly_signal,
+                "rsi_14" => r.rsi_14,
+                "kdj_k" => r.kdj_k,
+                "kdj_d" => r.kdj_d,
+                "kdj_j" => r.kdj_j,
+                "bb_upper" => r.bb_upper,
+                "bb_middle" => r.bb_middle,
+                "bb_lower" => r.bb_lower,
+                "bb_bandwidth" => r.bb_bandwidth,
+                "bb_percent_b" => r.bb_percent_b,
+                "atr" => r.atr,
+                "volatility_5" => r.volatility_5,
+                "volatility_20" => r.volatility_20,
+                "asi" => r.asi,
+                "obv" => r.obv,
+                "volume_ratio" => r.volume_ratio,
+                "price_momentum_5" => r.price_momentum_5,
+                "price_momentum_10" => r.price_momentum_10,
+                "price_momentum_20" => r.price_momentum_20,
+                "price_position_52w" => r.price_position_52w,
+                "body_size" => r.body_size,
+                "upper_shadow" => r.upper_shadow,
+                "lower_shadow" => r.lower_shadow,
+                "trend_strength" => r.trend_strength,
+                "adx_14" => r.adx_14,
+                "vwap_distance_pct" => r.vwap_distance_pct,
+                "cmf_20" => r.cmf_20,
+                "aroon_up_25" => r.aroon_up_25,
+                "return_lag_1" => r.return_lag_1,
+                "return_lag_2" => r.return_lag_2,
+                "return_lag_3" => r.return_lag_3,
+                "overnight_gap" => r.overnight_gap,
+                "gap_pct" => r.gap_pct,
+                "volume_roc_5" => r.volume_roc_5,
+                "price_roc_5" => r.price_roc_5,
+                "price_roc_10" => r.price_roc_10,
+                "price_roc_20" => r.price_roc_20,
+                "hist_volatility_20" => r.hist_volatility_20,
+                "consecutive_days" => r.consecutive_days.map(|v| v as f64),
+                "index_csi300_pct_chg" => r.index_csi300_pct_chg,
+                "index_csi300_vs_ma5_pct" => r.index_csi300_vs_ma5_pct,
+                "index_csi300_vs_ma20_pct" => r.index_csi300_vs_ma20_pct,
+                "index_chinext_pct_chg" => r.index_chinext_pct_chg,
+                "index_chinext_vs_ma5_pct" => r.index_chinext_vs_ma5_pct,
+                "index_chinext_vs_ma20_pct" => r.index_chinext_vs_ma20_pct,
+                "index_xin9_pct_chg" => r.index_xin9_pct_chg,
+                "index_xin9_vs_ma5_pct" => r.index_xin9_vs_ma5_pct,
+                "index_xin9_vs_ma20_pct" => r.index_xin9_vs_ma20_pct,
+                "index_hsi_pct_chg" => r.index_hsi_pct_chg,
+                "index_hsi_vs_ma5_pct" => r.index_hsi_vs_ma5_pct,
+                "index_hsi_vs_ma20_pct" => r.index_hsi_vs_ma20_pct,
+                "fx_usdcnh_pct_chg" => r.fx_usdcnh_pct_chg,
+                "fx_usdcnh_vs_ma5_pct" => r.fx_usdcnh_vs_ma5_pct,
+                "fx_usdcnh_vs_ma20_pct" => r.fx_usdcnh_vs_ma20_pct,
+                "net_mf_vol" => r.net_mf_vol,
+                "net_mf_amount" => r.net_mf_amount,
+                "smart_money_ratio" => r.smart_money_ratio,
+                "large_order_flow" => r.large_order_flow,
+                "industry_avg_return" => r.industry_avg_return,
+                "stock_vs_industry" => r.stock_vs_industry,
+                "industry_momentum_5d" => r.industry_momentum_5d,
+                "industry_momentum" => r.industry_momentum,
+                "turnover_rate" => r.turnover_rate,
+                "turnover_rate_f" => r.turnover_rate_f,
+                "pe" => r.pe,
+                "pe_ttm" => r.pe_ttm,
+                "pb" => r.pb,
+                "dv_ratio" => r.dv_ratio,
+                "dv_ttm" => r.dv_ttm,
+                "total_share" => r.total_share,
+                "float_share" => r.float_share,
+                "free_share" => r.free_share,
+                "vol_percentile" => r.vol_percentile,
+                "pe_percentile_52w" => r.pe_percentile_52w,
+                "sector_momentum_vs_market" => r.sector_momentum_vs_market,
+                "volume_accel_5d" => r.volume_accel_5d,
+                "price_vs_52w_high" => r.price_vs_52w_high,
+                "consecutive_up_days" => r.consecutive_up_days.map(|v| v as f64),
+                _ => None,
+            };
+            data[i].push(v.unwrap_or(f64::NAN));
+        }
+    }
+
+    // Impute medians for NaNs
+    for col in data.iter_mut() {
+        let mut vals: Vec<f64> = col.iter().cloned().filter(|x| x.is_finite()).collect();
+        let med = median(&mut vals);
+        for x in col.iter_mut() { if !x.is_finite() { *x = med; } }
+    }
+
+    // Winsorize heavy-tailed features (clip tails) before log1p/standardize
+    // Use symmetric tails at p = 0.01 (1%) for 1st and 99th percentiles
+    const WINSORIZE_COLS: &[&str] = &[
+        "macd_signal", "macd_weekly_signal", "macd_monthly_signal",
+        "volatility_5", "volatility_20",
+        "open_pct", "amount", "volume",
+        "sma_5", "obv",
+        "close_pct", "low_pct", "high_from_open_pct",
+        "price_momentum_5",
+    ];
+    let mut winsor_bounds: std::collections::HashMap<&str, (f64,f64)> = std::collections::HashMap::new();
+    let p = 0.01_f64;
+    for (i, col) in NUMERIC_COLS.iter().enumerate() {
+        if WINSORIZE_COLS.contains(col) {
+            let mut vals: Vec<f64> = data[i].iter().cloned().filter(|v| v.is_finite()).collect();
+            if !vals.is_empty() {
+                vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
+                let n = vals.len();
+                let lo_idx = (p * (n as f64)).floor() as usize;
+                let hi_idx = ((1.0 - p) * (n as f64)).ceil() as usize;
+                let lo = vals.get(lo_idx).cloned().unwrap_or(vals[0]);
+                let hi = vals.get(std::cmp::min(hi_idx, n-1)).cloned().unwrap_or(*vals.last().unwrap());
+                // apply clipping
+                for x in data[i].iter_mut() {
+                    if *x < lo { *x = lo; }
+                    if *x > hi { *x = hi; }
+                }
+                winsor_bounds.insert(*col, (lo, hi));
+            }
+        }
+    }
+    // persist winsor bounds for reproducibility
+    std::fs::create_dir_all("artifacts")?;
+    let mut wf = File::create("artifacts/winsor_params.csv")?;
+    writeln!(wf, "feature,lo,hi")?;
+    for (k, (lo, hi)) in winsor_bounds.iter() {
+        writeln!(wf, "{},{},{}", k, lo, hi)?;
+    }
+
+    // Optionally apply log1p to selected columns
+    let mut log1p_mask: Vec<bool> = vec![false; n_features];
+    if apply_log1p {
+        let log1p_set: std::collections::HashSet<&str> = LOG1P_COLS.iter().copied().collect();
+        for (i, col) in NUMERIC_COLS.iter().enumerate() {
+            if log1p_set.contains(col) {
+                log1p_mask[i] = true;
+                for x in data[i].iter_mut() {
+                    if x.is_finite() && *x > 0.0 {
+                        *x = (*x + 1.0).ln();
+                    }
+                }
+            }
+        }
+    }
+
+    // If standardize requested, compute mean/std and z-score
+    let mut means: Vec<f64> = vec![0.0; n_features];
+    let mut stds: Vec<f64> = vec![1.0; n_features];
+    if standardize {
+        for i in 0..n_features {
+            let col = &data[i];
+            let sum: f64 = col.iter().sum();
+            let mean = sum / (col.len() as f64);
+            let mut ss = 0.0f64;
+            for &v in col.iter() { ss += (v - mean) * (v - mean); }
+            let var = if col.len() > 0 { ss / (col.len() as f64) } else { 0.0 };
+            let sd = var.sqrt();
+            let sd = if sd == 0.0 { 1.0 } else { sd };
+            means[i] = mean;
+            stds[i] = sd;
+            for x in data[i].iter_mut() {
+                *x = (*x - mean) / sd;
+            }
+        }
+
+        // Write scale parameters to artifacts/scale_params.csv
+        std::fs::create_dir_all("artifacts")?;
+        let mut f = File::create("artifacts/scale_params.csv")?;
+        writeln!(f, "feature,applied_log1p,mean,std")?;
+        for (i, col) in NUMERIC_COLS.iter().enumerate() {
+            writeln!(f, "{},{},{},{}", col, if log1p_mask[i] {1} else {0}, means[i], stds[i])?;
+        }
+    }
+
+    // Set transformed values back into FeatureRow structs
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        for (i, col) in NUMERIC_COLS.iter().enumerate() {
+            let v = data[i][row_idx];
+            match *col {
+                "volume" => { row.volume = v; }
+                "amount" => { row.amount = Some(v); }
+                "open_pct" => { row.open_pct = Some(v); }
+                "high_pct" => { row.high_pct = Some(v); }
+                "low_pct" => { row.low_pct = Some(v); }
+                "close_pct" => { row.close_pct = Some(v); }
+                "high_from_open_pct" => { row.high_from_open_pct = Some(v); }
+                "low_from_open_pct" => { row.low_from_open_pct = Some(v); }
+                "close_from_open_pct" => { row.close_from_open_pct = Some(v); }
+                "intraday_range_pct" => { row.intraday_range_pct = Some(v); }
+                "close_position_in_range" => { row.close_position_in_range = Some(v); }
+                "sma_5" => { row.sma_5 = Some(v); }
+                "sma_10" => { row.sma_10 = Some(v); }
+                "sma_20" => { row.sma_20 = Some(v); }
+                "sma_5" => { row.sma_5 = Some(v); }
+                "sma_10" => { row.sma_10 = Some(v); }
+                "sma_20" => { row.sma_20 = Some(v); }
+                "macd_line" => { row.macd_line = Some(v); }
+                "macd_signal" => { row.macd_signal = Some(v); }
+                "macd_histogram" => { row.macd_histogram = Some(v); }
+                "macd_weekly_line" => { row.macd_weekly_line = Some(v); }
+                "macd_weekly_signal" => { row.macd_weekly_signal = Some(v); }
+                "macd_monthly_line" => { row.macd_monthly_line = Some(v); }
+                "macd_monthly_signal" => { row.macd_monthly_signal = Some(v); }
+                "rsi_14" => { row.rsi_14 = Some(v); }
+                "kdj_k" => { row.kdj_k = Some(v); }
+                "kdj_d" => { row.kdj_d = Some(v); }
+                "kdj_j" => { row.kdj_j = Some(v); }
+                "bb_upper" => { row.bb_upper = Some(v); }
+                "bb_middle" => { row.bb_middle = Some(v); }
+                "bb_lower" => { row.bb_lower = Some(v); }
+                "bb_bandwidth" => { row.bb_bandwidth = Some(v); }
+                "bb_percent_b" => { row.bb_percent_b = Some(v); }
+                "atr" => { row.atr = Some(v); }
+                "volatility_5" => { row.volatility_5 = Some(v); }
+                "volatility_20" => { row.volatility_20 = Some(v); }
+                "asi" => { row.asi = Some(v); }
+                "obv" => { row.obv = Some(v); }
+                "volume_ratio" => { row.volume_ratio = Some(v); }
+                "price_momentum_5" => { row.price_momentum_5 = Some(v); }
+                "price_momentum_10" => { row.price_momentum_10 = Some(v); }
+                "price_momentum_20" => { row.price_momentum_20 = Some(v); }
+                "price_position_52w" => { row.price_position_52w = Some(v); }
+                "body_size" => { row.body_size = Some(v); }
+                "upper_shadow" => { row.upper_shadow = Some(v); }
+                "lower_shadow" => { row.lower_shadow = Some(v); }
+                "trend_strength" => { row.trend_strength = Some(v); }
+                "adx_14" => { row.adx_14 = Some(v); }
+                "vwap_distance_pct" => { row.vwap_distance_pct = Some(v); }
+                "cmf_20" => { row.cmf_20 = Some(v); }
+                "aroon_up_25" => { row.aroon_up_25 = Some(v); }
+                "return_lag_1" => { row.return_lag_1 = Some(v); }
+                "return_lag_2" => { row.return_lag_2 = Some(v); }
+                "return_lag_3" => { row.return_lag_3 = Some(v); }
+                "overnight_gap" => { row.overnight_gap = Some(v); }
+                "gap_pct" => { row.gap_pct = Some(v); }
+                "volume_roc_5" => { row.volume_roc_5 = Some(v); }
+                "price_roc_5" => { row.price_roc_5 = Some(v); }
+                "price_roc_10" => { row.price_roc_10 = Some(v); }
+                "price_roc_20" => { row.price_roc_20 = Some(v); }
+                "hist_volatility_20" => { row.hist_volatility_20 = Some(v); }
+                "consecutive_days" => { row.consecutive_days = Some(v.round() as i32); }
+                "index_csi300_pct_chg" => { row.index_csi300_pct_chg = Some(v); }
+                "index_csi300_vs_ma5_pct" => { row.index_csi300_vs_ma5_pct = Some(v); }
+                "index_csi300_vs_ma20_pct" => { row.index_csi300_vs_ma20_pct = Some(v); }
+                "index_chinext_pct_chg" => { row.index_chinext_pct_chg = Some(v); }
+                "index_chinext_vs_ma5_pct" => { row.index_chinext_vs_ma5_pct = Some(v); }
+                "index_chinext_vs_ma20_pct" => { row.index_chinext_vs_ma20_pct = Some(v); }
+                "index_xin9_pct_chg" => { row.index_xin9_pct_chg = Some(v); }
+                "index_xin9_vs_ma5_pct" => { row.index_xin9_vs_ma5_pct = Some(v); }
+                "index_xin9_vs_ma20_pct" => { row.index_xin9_vs_ma20_pct = Some(v); }
+                "index_hsi_pct_chg" => { row.index_hsi_pct_chg = Some(v); }
+                "index_hsi_vs_ma5_pct" => { row.index_hsi_vs_ma5_pct = Some(v); }
+                "index_hsi_vs_ma20_pct" => { row.index_hsi_vs_ma20_pct = Some(v); }
+                "fx_usdcnh_pct_chg" => { row.fx_usdcnh_pct_chg = Some(v); }
+                "fx_usdcnh_vs_ma5_pct" => { row.fx_usdcnh_vs_ma5_pct = Some(v); }
+                "fx_usdcnh_vs_ma20_pct" => { row.fx_usdcnh_vs_ma20_pct = Some(v); }
+                "net_mf_vol" => { row.net_mf_vol = Some(v); }
+                "net_mf_amount" => { row.net_mf_amount = Some(v); }
+                "smart_money_ratio" => { row.smart_money_ratio = Some(v); }
+                "large_order_flow" => { row.large_order_flow = Some(v); }
+                "industry_avg_return" => { row.industry_avg_return = Some(v); }
+                "stock_vs_industry" => { row.stock_vs_industry = Some(v); }
+                "industry_momentum_5d" => { row.industry_momentum_5d = Some(v); }
+                "industry_momentum" => { row.industry_momentum = Some(v); }
+                "turnover_rate" => { row.turnover_rate = Some(v); }
+                "turnover_rate_f" => { row.turnover_rate_f = Some(v); }
+                "pe" => { row.pe = Some(v); }
+                "pe_ttm" => { row.pe_ttm = Some(v); }
+                "pb" => { row.pb = Some(v); }
+                "dv_ratio" => { row.dv_ratio = Some(v); }
+                "dv_ttm" => { row.dv_ttm = Some(v); }
+                "total_share" => { row.total_share = Some(v); }
+                "float_share" => { row.float_share = Some(v); }
+                "free_share" => { row.free_share = Some(v); }
+                "vol_percentile" => { row.vol_percentile = Some(v); }
+                "pe_percentile_52w" => { row.pe_percentile_52w = Some(v); }
+                "sector_momentum_vs_market" => { row.sector_momentum_vs_market = Some(v); }
+                "volume_accel_5d" => { row.volume_accel_5d = Some(v); }
+                "price_vs_52w_high" => { row.price_vs_52w_high = Some(v); }
+                "consecutive_up_days" => { row.consecutive_up_days = Some(v.round() as i32); }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 struct FeatureRow {
@@ -1583,11 +2497,6 @@ struct FeatureRow {
     close_from_open_pct: Option<f64>,
     intraday_range_pct: Option<f64>,
     close_position_in_range: Option<f64>,
-    ema_5: Option<f64>,
-    ema_10: Option<f64>,
-    ema_20: Option<f64>,
-    ema_30: Option<f64>,
-    ema_60: Option<f64>,
     sma_5: Option<f64>,
     sma_10: Option<f64>,
     sma_20: Option<f64>,
@@ -1624,9 +2533,7 @@ struct FeatureRow {
     adx_14: Option<f64>,
     vwap_distance_pct: Option<f64>,
     cmf_20: Option<f64>,
-    williams_r_14: Option<f64>,
     aroon_up_25: Option<f64>,
-    aroon_down_25: Option<f64>,
     return_lag_1: Option<f64>,
     return_lag_2: Option<f64>,
     return_lag_3: Option<f64>,
@@ -1682,15 +2589,11 @@ struct FeatureRow {
     pe: Option<f64>,
     pe_ttm: Option<f64>,
     pb: Option<f64>,
-    ps: Option<f64>,
-    ps_ttm: Option<f64>,
     dv_ratio: Option<f64>,
     dv_ttm: Option<f64>,
     total_share: Option<f64>,
     float_share: Option<f64>,
     free_share: Option<f64>,
-    total_mv: Option<f64>,
-    circ_mv: Option<f64>,
 
     // NEW: 5 predictive features for accuracy improvement
     pe_percentile_52w: Option<f64>,
@@ -1698,7 +2601,17 @@ struct FeatureRow {
     volume_accel_5d: Option<f64>,
     price_vs_52w_high: Option<f64>,
     consecutive_up_days: Option<i32>,
+
+    // Embeddings (deterministic hash-based, dim=8)
+    industry_emb: [f64; 8],
+    act_ent_type_emb: [f64; 8],
+
+    // Imputation flags for previously-missing fields
+    close_position_in_range_imputed: Option<bool>,
+    macd_monthly_line_imputed: Option<bool>,
+    macd_monthly_signal_imputed: Option<bool>,
 }
+
 
 #[derive(Clone, Debug)]
 struct DailyBasic {
@@ -1710,15 +2623,11 @@ struct DailyBasic {
     pe: f64,
     pe_ttm: f64,
     pb: f64,
-    ps: f64,
-    ps_ttm: f64,
     dv_ratio: f64,
     dv_ttm: f64,
     total_share: f64,
     float_share: f64,
     free_share: f64,
-    total_mv: f64,
-    circ_mv: f64,
 }
 
 // Helper struct for moneyflow data
@@ -1786,15 +2695,11 @@ async fn prefetch_daily_basic_map(
             COALESCE(pe::DOUBLE PRECISION, 0.0) as "pe!",
             COALESCE(pe_ttm::DOUBLE PRECISION, 0.0) as "pe_ttm!",
             COALESCE(pb::DOUBLE PRECISION, 0.0) as "pb!",
-            COALESCE(ps::DOUBLE PRECISION, 0.0) as "ps!",
-            COALESCE(ps_ttm::DOUBLE PRECISION, 0.0) as "ps_ttm!",
             COALESCE(dv_ratio::DOUBLE PRECISION, 0.0) as "dv_ratio!",
             COALESCE(dv_ttm::DOUBLE PRECISION, 0.0) as "dv_ttm!",
             COALESCE(total_share::DOUBLE PRECISION, 0.0) as "total_share!",
             COALESCE(float_share::DOUBLE PRECISION, 0.0) as "float_share!",
-            COALESCE(free_share::DOUBLE PRECISION, 0.0) as "free_share!",
-            COALESCE(total_mv::DOUBLE PRECISION, 0.0) as "total_mv!",
-            COALESCE(circ_mv::DOUBLE PRECISION, 0.0) as "circ_mv!"
+            COALESCE(free_share::DOUBLE PRECISION, 0.0) as "free_share!"
         FROM daily_basic
         WHERE ts_code = $1 AND trade_date >= $2 AND trade_date <= $3
         "#,
@@ -1819,15 +2724,11 @@ async fn prefetch_daily_basic_map(
                 pe: row.pe,
                 pe_ttm: row.pe_ttm,
                 pb: row.pb,
-                ps: row.ps,
-                ps_ttm: row.ps_ttm,
                 dv_ratio: row.dv_ratio,
                 dv_ttm: row.dv_ttm,
                 total_share: row.total_share,
                 float_share: row.float_share,
                 free_share: row.free_share,
-                total_mv: row.total_mv,
-                circ_mv: row.circ_mv,
             },
         );
     }
@@ -1972,32 +2873,7 @@ async fn calculate_features_for_stock_sync(
             None
         };
 
-        // Moving averages
-        let ema_5 = if closes.len() >= 5 {
-            Some(calculate_ema_custom(&closes, 5))
-        } else {
-            None
-        };
-        let ema_10 = if closes.len() >= 10 {
-            Some(calculate_ema_custom(&closes, 10))
-        } else {
-            None
-        };
-        let ema_20 = if closes.len() >= 20 {
-            Some(calculate_ema_custom(&closes, 20))
-        } else {
-            None
-        };
-        let ema_30 = if closes.len() >= 30 {
-            Some(calculate_ema_custom(&closes, 30))
-        } else {
-            None
-        };
-        let ema_60 = if closes.len() >= 60 {
-            Some(calculate_ema_custom(&closes, 60))
-        } else {
-            None
-        };
+        // Moving averages (EMAs removed from dataset; using SMAs instead)
         // --- Add SMA features using ta::indicators::SimpleMovingAverage ---
         let sma_5 = if closes.len() >= 5 {
             let mut sma = Sma::new(5).unwrap();
@@ -2319,12 +3195,12 @@ async fn calculate_features_for_stock_sync(
         };
 
 
-        // Aroon
-        let (aroon_up_25, aroon_down_25) = if highs.len() >= 25 {
-            let (up, down) = calculate_aroon(&highs, &lows, 25);
-            (Some(up), Some(down))
+        // Aroon (only up retained)
+        let aroon_up_25 = if highs.len() >= 25 {
+            let (up, _down) = calculate_aroon(&highs, &lows, 25);
+            Some(up)
         } else {
-            (None, None)
+            None
         };
 
         // Candlestick patterns (fix: call the functions and wrap in Some())
@@ -2619,12 +3495,11 @@ async fn calculate_features_for_stock_sync(
             None
         };
         let next_day_direction = next_day_return.map(|r| {
-            if r > 0.002 {
+            // Binary classification: 1 if up, -1 if down (no neutral class)
+            if r >= 0.0 {
                 1
-            } else if r < -0.002 {
-                -1
             } else {
-                0
+                -1
             }
         });
 
@@ -2640,12 +3515,11 @@ async fn calculate_features_for_stock_sync(
             None
         };
         let next_3day_direction = next_3day_return.map(|r| {
-            if r > 0.005 {
+            // Binary classification: 1 if up, -1 if down (no neutral class)
+            if r >= 0.0 {
                 1
-            } else if r < -0.005 {
-                -1
             } else {
-                0
+                -1
             }
         });
 
@@ -2667,12 +3541,7 @@ async fn calculate_features_for_stock_sync(
 
         // MFI removed (insufficient historical data for reliable calculation)
 
-        // Williams %R
-        let williams_r_14 = if highs.len() >= 14 {
-            Some(calculate_williams_r(&highs, &lows, day.close, 14))
-        } else {
-            None
-        };
+
 
         // Industry features (lookup from pre-fetched map)
         // Use most-recent industry performance strictly prior to the current `trade_date` to avoid look-ahead.
@@ -2892,11 +3761,6 @@ async fn calculate_features_for_stock_sync(
                 close_from_open_pct,
                 intraday_range_pct,
                 close_position_in_range,
-                ema_5,
-                ema_10,
-                ema_20,
-                ema_30,
-                ema_60,
                 sma_5,
                 sma_10,
                 sma_20,
@@ -2933,9 +3797,7 @@ async fn calculate_features_for_stock_sync(
                 adx_14,
                 vwap_distance_pct,
                 cmf_20,
-                williams_r_14,
                 aroon_up_25,
-                aroon_down_25,
                 return_lag_1,
                 return_lag_2,
                 return_lag_3,
@@ -2985,15 +3847,11 @@ async fn calculate_features_for_stock_sync(
                 pe: daily_basic.as_ref().map(|db| db.pe),
                 pe_ttm: daily_basic.as_ref().map(|db| db.pe_ttm),
                 pb: daily_basic.as_ref().map(|db| db.pb),
-                ps: daily_basic.as_ref().map(|db| db.ps),
-                ps_ttm: daily_basic.as_ref().map(|db| db.ps_ttm),
                 dv_ratio: daily_basic.as_ref().map(|db| db.dv_ratio),
                 dv_ttm: Some(daily_basic.as_ref().map(|db| db.dv_ttm).unwrap_or(0.0)), // Default to 0.0 if no dividends
                 total_share: daily_basic.as_ref().map(|db| db.total_share),
                 float_share: daily_basic.as_ref().map(|db| db.float_share),
                 free_share: daily_basic.as_ref().map(|db| db.free_share),
-                total_mv: daily_basic.as_ref().map(|db| db.total_mv),
-                circ_mv: daily_basic.as_ref().map(|db| db.circ_mv),
                 // --- Add missing fields ---
                 vol_percentile,
                 high_vol_regime,
@@ -3008,12 +3866,21 @@ async fn calculate_features_for_stock_sync(
                 volume_accel_5d,
                 price_vs_52w_high,
                 consecutive_up_days,
+
+                // Embedding placeholders (filled later)
+                industry_emb: [0.0; 8],
+                act_ent_type_emb: [0.0; 8],
+
+                // Imputation flags (computed post-hoc)
+                close_position_in_range_imputed: None,
+                macd_monthly_line_imputed: None,
+                macd_monthly_signal_imputed: None,
             });
         } // end if day.trade_date >= min_date
     }
     // Runtime guard: drop any feature rows with trade_date after current_date
     let total_rows = features.len();
-    let filtered: Vec<FeatureRow> = features
+    let mut filtered: Vec<FeatureRow> = features
         .into_iter()
         .filter(|r| r.trade_date.as_str() <= current_date)
         .collect();
@@ -3021,6 +3888,76 @@ async fn calculate_features_for_stock_sync(
     if dropped > 0 {
         eprintln!("⚠️  Dropped {} future-dated feature rows (CURRENT_DATE={}) for {}", dropped, current_date, ts_code);
     }
+
+    // --- Imputation & Embedding Post-processing (per-stock) ---
+    // Close position in range: fill missing with per-stock median, fallback to 0.5
+    let mut close_vals: Vec<f64> = filtered.iter().filter_map(|r| r.close_position_in_range).collect();
+    let close_median = if !close_vals.is_empty() {
+        close_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = close_vals.len() / 2;
+        if close_vals.len() % 2 == 0 {
+            (close_vals[mid - 1] + close_vals[mid]) / 2.0
+        } else {
+            close_vals[mid]
+        }
+    } else {
+        0.5
+    };
+
+    // MACD monthly line/signal median fallback
+    let mut macd_line_vals: Vec<f64> = filtered.iter().filter_map(|r| r.macd_monthly_line).collect();
+    let macd_line_median = if !macd_line_vals.is_empty() {
+        macd_line_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = macd_line_vals.len() / 2;
+        if macd_line_vals.len() % 2 == 0 { (macd_line_vals[mid - 1] + macd_line_vals[mid]) / 2.0 } else { macd_line_vals[mid] }
+    } else { 0.0 };
+
+    let mut macd_sig_vals: Vec<f64> = filtered.iter().filter_map(|r| r.macd_monthly_signal).collect();
+    let macd_sig_median = if !macd_sig_vals.is_empty() {
+        macd_sig_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = macd_sig_vals.len() / 2;
+        if macd_sig_vals.len() % 2 == 0 { (macd_sig_vals[mid - 1] + macd_sig_vals[mid]) / 2.0 } else { macd_sig_vals[mid] }
+    } else { 0.0 };
+
+    // Embedding params (fixed defaults)
+    let embed_dim = EMBED_DIM;
+    let embed_seed = EMBED_SEED;
+
+    for r in filtered.iter_mut() {
+        // Close position imputation
+        if r.close_position_in_range.is_none() {
+            r.close_position_in_range = Some(close_median);
+            r.close_position_in_range_imputed = Some(true);
+        } else {
+            r.close_position_in_range_imputed = Some(false);
+        }
+        // MACD monthly
+        if r.macd_monthly_line.is_none() {
+            r.macd_monthly_line = Some(macd_line_median);
+            r.macd_monthly_line_imputed = Some(true);
+        } else {
+            r.macd_monthly_line_imputed = Some(false);
+        }
+        if r.macd_monthly_signal.is_none() {
+            r.macd_monthly_signal = Some(macd_sig_median);
+            r.macd_monthly_signal_imputed = Some(true);
+        } else {
+            r.macd_monthly_signal_imputed = Some(false);
+        }
+
+        // Embeddings (deterministic)
+        let ind = r.industry.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        let ind_vec = hash_to_embedding_fixed(&ind, embed_dim, embed_seed);
+        for i in 0..embed_dim.min(r.industry_emb.len()) {
+            r.industry_emb[i] = ind_vec.get(i).cloned().unwrap_or(0.0);
+        }
+        let at = r.act_ent_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        let at_vec = hash_to_embedding_fixed(&at, embed_dim, embed_seed.wrapping_add(1));
+        for i in 0..embed_dim.min(r.act_ent_type_emb.len()) {
+            r.act_ent_type_emb[i] = at_vec.get(i).cloned().unwrap_or(0.0);
+        }
+    }
+
     // If leak_check was enabled and we found any lookup issues, abort with details
     if leak_check && !leak_issues.lock().unwrap().is_empty() {
         let issues = leak_issues.lock().unwrap();
@@ -3075,15 +4012,11 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS pe DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS pe_ttm DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS pb DOUBLE PRECISION;",
-        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS ps DOUBLE PRECISION;",
-        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS ps_ttm DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS dv_ratio DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS dv_ttm DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS total_share DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS float_share DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS free_share DOUBLE PRECISION;",
-        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS total_mv DOUBLE PRECISION;",
-        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS circ_mv DOUBLE PRECISION;",
         // Index HSI columns
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS index_hsi_pct_chg DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS index_hsi_vs_ma5_pct DOUBLE PRECISION;",
@@ -3101,128 +4034,34 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS stock_vs_industry DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum_5d DOUBLE PRECISION;",
         "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_momentum DOUBLE PRECISION;",
+        // Embedding columns (industry, act_ent_type) - fixed dim 8
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_0 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_1 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_2 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_3 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_4 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_5 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_6 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS industry_emb_7 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_0 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_1 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_2 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_3 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_4 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_5 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_6 DOUBLE PRECISION;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS act_ent_type_emb_7 DOUBLE PRECISION;",
+        // Imputation flags
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS close_position_in_range_imputed BOOLEAN;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS macd_monthly_line_imputed BOOLEAN;",
+        "ALTER TABLE ml_training_dataset ADD COLUMN IF NOT EXISTS macd_monthly_signal_imputed BOOLEAN;",
     ];
 
     // Run CREATE with PRIMARY KEY
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS ml_training_dataset (
-            ts_code TEXT NOT NULL,
-            trade_date TEXT NOT NULL,
-            PRIMARY KEY (ts_code, trade_date),
-            industry TEXT,
-            act_ent_type TEXT,
-            volume DOUBLE PRECISION,
-            amount DOUBLE PRECISION,
-            month SMALLINT,
-            weekday SMALLINT,
-            quarter SMALLINT,
-            week_no SMALLINT,
-            open_pct DOUBLE PRECISION,
-            high_pct DOUBLE PRECISION,
-            low_pct DOUBLE PRECISION,
-            close_pct DOUBLE PRECISION,
-            high_from_open_pct DOUBLE PRECISION,
-            low_from_open_pct DOUBLE PRECISION,
-            close_from_open_pct DOUBLE PRECISION,
-            intraday_range_pct DOUBLE PRECISION,
-            close_position_in_range DOUBLE PRECISION,
-            ema_5 DOUBLE PRECISION,
-            ema_10 DOUBLE PRECISION,
-            ema_20 DOUBLE PRECISION,
-            ema_30 DOUBLE PRECISION,
-            ema_60 DOUBLE PRECISION,
-            sma_5 DOUBLE PRECISION,
-            sma_10 DOUBLE PRECISION,
-            sma_20 DOUBLE PRECISION,
-            macd_line DOUBLE PRECISION,
-            macd_signal DOUBLE PRECISION,
-            macd_histogram DOUBLE PRECISION,
-            macd_weekly_line DOUBLE PRECISION,
-            macd_weekly_signal DOUBLE PRECISION,
-            macd_monthly_line DOUBLE PRECISION,
-            macd_monthly_signal DOUBLE PRECISION,
-            rsi_14 DOUBLE PRECISION,
-            kdj_k DOUBLE PRECISION,
-            kdj_d DOUBLE PRECISION,
-            kdj_j DOUBLE PRECISION,
-            bb_upper DOUBLE PRECISION,
-            bb_middle DOUBLE PRECISION,
-            bb_lower DOUBLE PRECISION,
-            bb_bandwidth DOUBLE PRECISION,
-            bb_percent_b DOUBLE PRECISION,
-            atr DOUBLE PRECISION,
-            volatility_5 DOUBLE PRECISION,
-            volatility_20 DOUBLE PRECISION,
-            asi DOUBLE PRECISION,
-            obv DOUBLE PRECISION,
-            volume_ratio DOUBLE PRECISION, -- feature column
-            price_momentum_5 DOUBLE PRECISION,
-            price_momentum_10 DOUBLE PRECISION,
-            price_momentum_20 DOUBLE PRECISION,
-            price_position_52w DOUBLE PRECISION,
-            body_size DOUBLE PRECISION,
-            upper_shadow DOUBLE PRECISION,
-            lower_shadow DOUBLE PRECISION,
-            trend_strength DOUBLE PRECISION,
-            adx_14 DOUBLE PRECISION,
-            vwap_distance_pct DOUBLE PRECISION,
-            cmf_20 DOUBLE PRECISION,
-            williams_r_14 DOUBLE PRECISION,
-            aroon_up_25 DOUBLE PRECISION,
-            aroon_down_25 DOUBLE PRECISION,
-            return_lag_1 DOUBLE PRECISION,
-            return_lag_2 DOUBLE PRECISION,
-            return_lag_3 DOUBLE PRECISION,
-            overnight_gap DOUBLE PRECISION,
-            gap_pct DOUBLE PRECISION,
-            volume_roc_5 DOUBLE PRECISION,
-            volume_spike BOOLEAN,
-            price_roc_5 DOUBLE PRECISION,
-            price_roc_10 DOUBLE PRECISION,
-            price_roc_20 DOUBLE PRECISION,
-            hist_volatility_20 DOUBLE PRECISION,
-            is_doji BOOLEAN,
-            is_hammer BOOLEAN,
-            is_shooting_star BOOLEAN,
-            consecutive_days INTEGER,
-            index_csi300_pct_chg DOUBLE PRECISION,
-            index_csi300_vs_ma5_pct DOUBLE PRECISION,
-            index_csi300_vs_ma20_pct DOUBLE PRECISION,
-            index_chinext_pct_chg DOUBLE PRECISION,
-            index_chinext_vs_ma5_pct DOUBLE PRECISION,
-            index_chinext_vs_ma20_pct DOUBLE PRECISION,
-            index_xin9_pct_chg DOUBLE PRECISION,
-            index_xin9_vs_ma5_pct DOUBLE PRECISION,
-            index_xin9_vs_ma20_pct DOUBLE PRECISION,
-           
-            -- DailyBasic columns (excluding close)
-            turnover_rate DOUBLE PRECISION,
-            turnover_rate_f DOUBLE PRECISION,
-            -- DO NOT add volume_ratio again here!
-            pe DOUBLE PRECISION,
-            pe_ttm DOUBLE PRECISION,
-            pb DOUBLE PRECISION,
-            ps DOUBLE PRECISION,
-            ps_ttm DOUBLE PRECISION,
-            dv_ratio DOUBLE PRECISION,
-            dv_ttm DOUBLE PRECISION,
-            total_share DOUBLE PRECISION,
-            float_share DOUBLE PRECISION,
-            free_share DOUBLE PRECISION,
-            total_mv DOUBLE PRECISION,
-            circ_mv DOUBLE PRECISION,
-            vol_percentile DOUBLE PRECISION,
-            high_vol_regime SMALLINT,
-            next_day_return DOUBLE PRECISION,
-            next_day_direction SMALLINT,
-            next_3day_return DOUBLE PRECISION,
-            next_3day_direction SMALLINT
-        );
-        "#,
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query(get_ml_create_table_sql())
+        .execute(pool)
+        .await?;
+    
 
     // Run ALTER TABLEs to add missing columns (idempotent, safe if already exist)
     for stmt in alter_statements.iter() {
@@ -3230,4 +4069,36 @@ async fn create_ml_training_dataset_table(pool: &Pool<Postgres>) -> Result<(), s
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_to_embedding_fixed;
+    use super::EMBED_DIM;
+    use super::EMBED_SEED;
+
+    #[test]
+    fn test_hash_to_embedding_fixed_deterministic_normalized() {
+        let v1 = hash_to_embedding_fixed("TEST_INDUSTRY", EMBED_DIM, EMBED_SEED);
+        let v2 = hash_to_embedding_fixed("TEST_INDUSTRY", EMBED_DIM, EMBED_SEED);
+        assert_eq!(v1, v2);
+        let norm: f64 = v1.iter().map(|x| x * x).sum::<f64>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-12, "norm is {} not ~1", norm);
+    }
+
+    #[test]
+    fn test_hash_to_embedding_fixed_seed_variation_and_dim() {
+        let v1 = hash_to_embedding_fixed("TEST", EMBED_DIM, EMBED_SEED);
+        let v2 = hash_to_embedding_fixed("TEST", EMBED_DIM, EMBED_SEED.wrapping_add(1));
+        assert_ne!(v1, v2);
+        let v_small = hash_to_embedding_fixed("TEST", 4usize, EMBED_SEED);
+        assert_eq!(v_small.len(), 4);
+    }
+
+    #[test]
+    fn test_create_table_contains_embedding_columns() {
+        let sql = super::get_ml_create_table_sql();
+        assert!(sql.contains("industry_emb_0"));
+        assert!(sql.contains("act_ent_type_emb_7"));
+    }
 }

@@ -1,0 +1,184 @@
+======================================================================
+🚀 LIGHTGBM KC OPTIMIZED MULTI-CONFIG TRAINING
+======================================================================
+
+📊 SECTION 1: Loading Data Files
+----------------------------------------------------------------------
+✅ Training data: (139400, 118)
+✅ Validation data: (46467, 118)
+✅ Test data: (46465, 118)
+
+🎯 Target distribution (binary):
+   Train: {-1: 72625, 1: 66775}
+   Val:   {1: 23442, -1: 23025}
+
+🔧 SECTION 2: Data Preprocessing
+----------------------------------------------------------------------
+   Total features: 105
+✅ Preprocessing complete
+
+🧪 SECTION 3: Testing Multiple Configurations
+----------------------------------------------------------------------
+
+======================================================================
+🔬 Testing: Config1_HighReg - High Regularization (L1=1.5, L2=1.5)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[16]	train's auc: 0.689459	train's binary_logloss: 0.681687	valid's auc: 0.510681	valid's binary_logloss: 0.693482
+
+📊 Validation Results:
+   AUC-ROC:  0.5107
+   Accuracy: 0.5179
+   Precision: 0.6944
+   Recall:   0.0791
+   F1-Score: 0.1420
+
+   Test AUC-ROC:  0.5391
+   Test Accuracy: 0.5072
+   Test F1:       0.1707
+
+======================================================================
+🔬 Testing: Config2_MediumReg - Medium Regularization (L1=0.8, L2=0.8)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[12]	train's auc: 0.711064	train's binary_logloss: 0.678453	valid's auc: 0.512847	valid's binary_logloss: 0.694267
+
+📊 Validation Results:
+   AUC-ROC:  0.5128
+   Accuracy: 0.5104
+   Precision: 0.5961
+   Recall:   0.0913
+   F1-Score: 0.1583
+
+   Test AUC-ROC:  0.5545
+   Test Accuracy: 0.5108
+   Test F1:       0.2217
+
+======================================================================
+🔬 Testing: Config3_ShallowTrees - Shallow Trees (depth=3, leaves=10)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[2]	train's auc: 0.581368	train's binary_logloss: 0.691826	valid's auc: 0.529367	valid's binary_logloss: 0.69426
+
+📊 Validation Results:
+   AUC-ROC:  0.5294
+   Accuracy: 0.4955
+   Precision: 0.0000
+   Recall:   0.0000
+   F1-Score: 0.0000
+
+   Test AUC-ROC:  0.5055
+   Test Accuracy: 0.4874
+   Test F1:       0.0000
+
+======================================================================
+🔬 Testing: Config4_HighLR - Higher Learning Rate (lr=0.05)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[6]	train's auc: 0.665263	train's binary_logloss: 0.680446	valid's auc: 0.503633	valid's binary_logloss: 0.693694
+
+📊 Validation Results:
+   AUC-ROC:  0.5036
+   Accuracy: 0.5159
+   Precision: 0.5953
+   Recall:   0.1263
+   F1-Score: 0.2084
+
+   Test AUC-ROC:  0.5199
+   Test Accuracy: 0.5191
+   Test F1:       0.2611
+
+======================================================================
+🔬 Testing: Config5_Balanced - Balanced approach
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[3]	train's auc: 0.664218	train's binary_logloss: 0.688169	valid's auc: 0.506354	valid's binary_logloss: 0.69422
+
+📊 Validation Results:
+   AUC-ROC:  0.5064
+   Accuracy: 0.4955
+   Precision: 0.0000
+   Recall:   0.0000
+   F1-Score: 0.0000
+
+   Test AUC-ROC:  0.5119
+   Test Accuracy: 0.4959
+   Test F1:       0.0347
+
+======================================================================
+📊 RESULTS COMPARISON
+======================================================================
+
+              Config Val AUC Val Acc Val Recall Test AUC
+     Config1_HighReg  0.5107  0.5179     0.0791   0.5391
+   Config2_MediumReg  0.5128  0.5104     0.0913   0.5545
+Config3_ShallowTrees  0.5294  0.4955     0.0000   0.5055
+      Config4_HighLR  0.5036  0.5159     0.1263   0.5199
+    Config5_Balanced  0.5064  0.4955     0.0000   0.5119
+
+🏆 BEST MODEL: Config3_ShallowTrees (Val AUC: 0.5294)
+
+======================================================================
+✅ BEST MODEL DETAILED ANALYSIS
+======================================================================
+
+📋 Configuration: Shallow Trees (depth=3, leaves=10)
+
+   Learning Rate: 0.01
+   Max Depth: 3
+   Num Leaves: 10
+   Lambda L1: 1.0
+   Lambda L2: 1.0
+   Scale Pos Weight: 1.0876
+
+📈 Validation Metrics:
+   AUC-ROC:  0.5294
+   Accuracy: 0.4955
+   Precision: 0.0000
+   Recall:   0.0000
+   F1-Score: 0.0000
+
+   Test AUC-ROC:  0.5055
+   Test Accuracy: 0.4874
+   Test F1:       0.0000
+
+📋 Test Confusion Matrix:
+                  Pred -1  Pred 1
+   Actual -1        22648        0
+   Actual  1        23817        0
+
+✅ Best model predictions saved to artifacts/test_predictions_kc_best.csv
+
+📊 Top 20 Important Features:
+                  feature  importance
+   index_xin9_vs_ma20_pct  846.740997
+    index_chinext_pct_chg  718.408997
+        index_hsi_pct_chg  607.550018
+       index_xin9_pct_chg  459.212006
+    index_xin9_vs_ma5_pct  452.227997
+    fx_usdcnh_vs_ma20_pct  305.842010
+index_chinext_vs_ma20_pct  256.548004
+     industry_momentum_5d  180.537994
+ index_chinext_vs_ma5_pct  177.992996
+      close_from_open_pct  132.070999
+        price_momentum_20   63.370499
+                  low_pct    0.000000
+        low_from_open_pct    0.000000
+                    sma_5    0.000000
+              macd_signal    0.000000
+       intraday_range_pct    0.000000
+  close_position_in_range    0.000000
+       high_from_open_pct    0.000000
+                close_pct    0.000000
+             bb_bandwidth    0.000000
+
+✅ Results summary saved to artifacts/model_comparison_results.json
+
+======================================================================
+✅ MODEL OPTIMIZATION COMPLETE
+======================================================================

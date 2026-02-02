@@ -30,7 +30,7 @@ while IFS=, read -r TRAIN_CSV VAL_CSV; do
   python3 scripts/train_transformer.py \
     --train "data/train_resid_${SUFFIX}.csv" \
     --val "data/val_resid_${SUFFIX}.csv" \
-    --seq-len 60 --epochs 10 --batch 256 \
+    --seq-len 60 --epochs 10 --batch 64 \
     --model-out "artifacts/transformer_best_${SUFFIX}.pt" \
     --scaler-out "artifacts/transformer_scaler_${SUFFIX}.pkl" \
     --d-model 32 --n-head 2 --n-layers 1 --lr-scheduler cosine --resume \

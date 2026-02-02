@@ -1,0 +1,32 @@
+{
+  "name": "shallow_lr_pos10",
+  "params": {
+    "name": "shallow_lr_pos10",
+    "num_leaves": 20,
+    "learning_rate": 0.05,
+    "scale_pos_weight": 10,
+    "max_depth": 4
+  },
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5177800799831792,
+  "test_brier": 0.24990704204968778,
+  "quantile_summary": {
+    "q5": {
+      "trades": 7183,
+      "tot_return": 17.86997549731096
+    },
+    "q10": {
+      "trades": 46465,
+      "tot_return": 112.12160594636983
+    },
+    "q20": {
+      "trades": 46465,
+      "tot_return": 112.12160594636983
+    }
+  },
+  "predictions_file": "artifacts/test_predictions_kc_sweep_shallow_lr_pos10.csv"
+}

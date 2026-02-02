@@ -1,0 +1,38 @@
+{
+  "train": {
+    "rows": 139400,
+    "min_date": "2022-01-04",
+    "max_date": "2024-05-31",
+    "unique_dates": 582,
+    "unique_stocks": 240
+  },
+  "val": {
+    "rows": 46467,
+    "min_date": "2024-05-31",
+    "max_date": "2025-03-19",
+    "unique_dates": 194,
+    "unique_stocks": 240
+  },
+  "test": {
+    "rows": 46465,
+    "min_date": "2025-03-19",
+    "max_date": "2025-12-31",
+    "unique_dates": 195,
+    "unique_stocks": 240
+  },
+  "overlap_dates": {
+    "train_val_count": 1,
+    "val_test_count": 1,
+    "train_test_count": 0
+  },
+  "overlap_pairs": {
+    "train_val_count": 0,
+    "val_test_count": 0,
+    "train_test_count": 0
+  },
+  "chronological_split_ok": false,
+  "chronological_messages": [
+    "train.max_date >= val.min_date",
+    "val.max_date >= test.min_date"
+  ]
+}

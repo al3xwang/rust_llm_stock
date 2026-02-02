@@ -1,0 +1,752 @@
+[
+  {
+    "tc": 0.0,
+    "slippage": 0.0,
+    "total_cost": 0.0,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.01000578287314177,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 4.012304376415825
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0,
+    "total_cost": 0.0,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.009250473076761554,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.9107002542492515
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0,
+    "total_cost": 0.0,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.007787910179601515,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 5.985495453184141
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0005,
+    "total_cost": 0.0005,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.00917488786453592,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.7504404780000717
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0005,
+    "total_cost": 0.0005,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.008467172022317827,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.7718541430358907
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0005,
+    "total_cost": 0.0005,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.007085876390728169,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 5.265961460914107
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.001,
+    "total_cost": 0.001,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.008343992855930066,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.5020336988276366
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.001,
+    "total_cost": 0.001,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.007683870967874099,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.6429835380569955
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.001,
+    "total_cost": 0.001,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.006383842601854824,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 4.62000200960691
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0025,
+    "total_cost": 0.0025,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.005851307830112511,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.8309228749418716
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0025,
+    "total_cost": 0.0025,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.005333967804542919,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.3093850772979021
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.0025,
+    "total_cost": 0.0025,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.004277741235234787,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 3.0525784404210468
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.005,
+    "total_cost": 0.005,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.0016968327870832507,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.9243251822817582
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.005,
+    "total_cost": 0.005,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.0014174625323242823,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.10425921636251223
+  },
+  {
+    "tc": 0.0,
+    "slippage": 0.005,
+    "total_cost": 0.005,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.0007675722908680592,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 1.3453844071722356
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0,
+    "total_cost": 0.0005,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.00917488786453592,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.7504404780000717
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0,
+    "total_cost": 0.0005,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.008467172022317827,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.7718541430358907
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0,
+    "total_cost": 0.0005,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.007085876390728169,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 5.265961460914107
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0005,
+    "total_cost": 0.001,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.008343992855930066,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.5020336988276366
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0005,
+    "total_cost": 0.001,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.007683870967874099,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.6429835380569955
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0005,
+    "total_cost": 0.001,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.006383842601854824,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 4.62000200960691
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.001,
+    "total_cost": 0.0015,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.007513097847324214,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.266403991936035
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.001,
+    "total_cost": 0.0015,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.006900569913430372,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.5233799481399346
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.001,
+    "total_cost": 0.0015,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.005681808812981478,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 4.040149184568903
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0025,
+    "total_cost": 0.003,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.005020412821506659,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.6298737698054335
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0025,
+    "total_cost": 0.003,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.004550666750099191,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.2138119277475916
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.0025,
+    "total_cost": 0.003,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.003575707446361442,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 2.633393138662473
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.005,
+    "total_cost": 0.0055,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.0008659377784773998,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.7701571861034617
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.005,
+    "total_cost": 0.0055,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.0006341614778805559,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.1699322983875562
+  },
+  {
+    "tc": 0.0005,
+    "slippage": 0.005,
+    "total_cost": 0.0055,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 6.553850199471443e-05,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 1.1017618214269582
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0,
+    "total_cost": 0.001,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.008343992855930066,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.5020336988276366
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0,
+    "total_cost": 0.001,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.007683870967874099,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.6429835380569955
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0,
+    "total_cost": 0.001,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.006383842601854824,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 4.62000200960691
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0005,
+    "total_cost": 0.0015,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.007513097847324214,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.266403991936035
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0005,
+    "total_cost": 0.0015,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.006900569913430372,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.5233799481399346
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0005,
+    "total_cost": 0.0015,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.005681808812981478,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 4.040149184568903
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.001,
+    "total_cost": 0.002,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.006682202838718363,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 3.0429050937895674
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.001,
+    "total_cost": 0.002,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.006117268858986646,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.41238461789852043
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.001,
+    "total_cost": 0.002,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.004979775024108133,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 3.519687455327965
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0025,
+    "total_cost": 0.0035,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.004189517812900807,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.4392032818017544
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0025,
+    "total_cost": 0.0035,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.003767365695655464,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.12513584870390027
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.0025,
+    "total_cost": 0.0035,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.0028736736574880954,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 2.257250891540054
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.005,
+    "total_cost": 0.006,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 3.5042769871547224e-05,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.6239838819608425
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.005,
+    "total_cost": 0.006,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": -0.0001491395765631719,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.23084487678967924
+  },
+  {
+    "tc": 0.001,
+    "slippage": 0.005,
+    "total_cost": 0.006,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": -0.0006364952868786317,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 0.8832606315737543
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0,
+    "total_cost": 0.0025,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.005851307830112511,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.8309228749418716
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0,
+    "total_cost": 0.0025,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.005333967804542919,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.3093850772979021
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0,
+    "total_cost": 0.0025,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.004277741235234787,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 3.0525784404210468
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0005,
+    "total_cost": 0.003,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.005020412821506659,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.6298737698054335
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0005,
+    "total_cost": 0.003,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.004550666750099191,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.2138119277475916
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0005,
+    "total_cost": 0.003,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.003575707446361442,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 2.633393138662473
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.001,
+    "total_cost": 0.0035,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.004189517812900807,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 2.4392032818017544
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.001,
+    "total_cost": 0.0035,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.003767365695655464,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": 0.12513584870390027
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.001,
+    "total_cost": 0.0035,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.0028736736574880954,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 2.257250891540054
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0025,
+    "total_cost": 0.005,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.0016968327870832507,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.9243251822817582
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0025,
+    "total_cost": 0.005,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.0014174625323242823,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.10425921636251223
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.0025,
+    "total_cost": 0.005,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.0007675722908680592,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 1.3453844071722356
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.005,
+    "total_cost": 0.0075,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": -0.002457642255946008,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.2294564925551423
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.005,
+    "total_cost": 0.0075,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": -0.0024990427398943523,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.3883117532303504
+  },
+  {
+    "tc": 0.0025,
+    "slippage": 0.005,
+    "total_cost": 0.0075,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": -0.0027425966534986674,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 0.35405155815019373
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0,
+    "total_cost": 0.005,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.0016968327870832507,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.9243251822817582
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0,
+    "total_cost": 0.005,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.0014174625323242823,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.10425921636251223
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0,
+    "total_cost": 0.005,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 0.0007675722908680592,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 1.3453844071722356
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0005,
+    "total_cost": 0.0055,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 0.0008659377784773998,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.7701571861034617
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0005,
+    "total_cost": 0.0055,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": 0.0006341614778805559,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.1699322983875562
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0005,
+    "total_cost": 0.0055,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": 6.553850199471443e-05,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 1.1017618214269582
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.001,
+    "total_cost": 0.006,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": 3.5042769871547224e-05,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.6239838819608425
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.001,
+    "total_cost": 0.006,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": -0.0001491395765631719,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.23084487678967924
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.001,
+    "total_cost": 0.006,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": -0.0006364952868786317,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 0.8832606315737543
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0025,
+    "total_cost": 0.0075,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": -0.002457642255946008,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 1.2294564925551423
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0025,
+    "total_cost": 0.0075,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": -0.0024990427398943523,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.3883117532303504
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.0025,
+    "total_cost": 0.0075,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": -0.0027425966534986674,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": 0.35405155815019373
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.005,
+    "total_cost": 0.01,
+    "quantile": 0.05,
+    "trades": 2324,
+    "mean_net_per_trade": -0.00661211729897527,
+    "win_rate": 0.6002581755593803,
+    "total_daily_net": 0.6975326832181463
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.005,
+    "total_cost": 0.01,
+    "quantile": 0.1,
+    "trades": 4647,
+    "mean_net_per_trade": -0.006415548012112989,
+    "win_rate": 0.5956531095330321,
+    "total_daily_net": -0.5830314184946565
+  },
+  {
+    "tc": 0.005,
+    "slippage": 0.005,
+    "total_cost": 0.01,
+    "quantile": 0.2,
+    "trades": 9293,
+    "mean_net_per_trade": -0.006252765597865396,
+    "win_rate": 0.5791455934574411,
+    "total_daily_net": -0.22019688255345604
+  }
+]

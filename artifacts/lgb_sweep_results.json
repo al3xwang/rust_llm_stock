@@ -1,0 +1,194 @@
+[
+  {
+    "name": "baseline",
+    "params": {
+      "name": "baseline",
+      "num_leaves": 20,
+      "learning_rate": 0.02,
+      "scale_pos_weight": 1,
+      "max_depth": 6
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5215270399619422,
+    "test_brier": 0.2499067339911476,
+    "quantile_summary": {
+      "q5": {
+        "trades": 5986,
+        "tot_return": 35.60475199337513
+      },
+      "q10": {
+        "trades": 11736,
+        "tot_return": 51.777575557192655
+      },
+      "q20": {
+        "trades": 21551,
+        "tot_return": 97.88018287873656
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_baseline.csv"
+  },
+  {
+    "name": "shallow_high_lr",
+    "params": {
+      "name": "shallow_high_lr",
+      "num_leaves": 20,
+      "learning_rate": 0.05,
+      "scale_pos_weight": 1,
+      "max_depth": 4
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5210724169947267,
+    "test_brier": 0.24990614916129975,
+    "quantile_summary": {
+      "q5": {
+        "trades": 5261,
+        "tot_return": 18.106447426199065
+      },
+      "q10": {
+        "trades": 19166,
+        "tot_return": 59.75473310487517
+      },
+      "q20": {
+        "trades": 21082,
+        "tot_return": 63.03866674505744
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_shallow_high_lr.csv"
+  },
+  {
+    "name": "deep_balanced",
+    "params": {
+      "name": "deep_balanced",
+      "num_leaves": 40,
+      "learning_rate": 0.02,
+      "scale_pos_weight": 1,
+      "max_depth": 10
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5283319037645563,
+    "test_brier": 0.24990623286329933,
+    "quantile_summary": {
+      "q5": {
+        "trades": 4851,
+        "tot_return": 36.15643358372081
+      },
+      "q10": {
+        "trades": 11316,
+        "tot_return": 45.9250617224081
+      },
+      "q20": {
+        "trades": 22573,
+        "tot_return": 71.51642007199567
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_deep_balanced.csv"
+  },
+  {
+    "name": "pos_w_5",
+    "params": {
+      "name": "pos_w_5",
+      "num_leaves": 20,
+      "learning_rate": 0.02,
+      "scale_pos_weight": 5,
+      "max_depth": 6
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5218960421189315,
+    "test_brier": 0.24990640382018248,
+    "quantile_summary": {
+      "q5": {
+        "trades": 6464,
+        "tot_return": 37.076925929379485
+      },
+      "q10": {
+        "trades": 45747,
+        "tot_return": 104.53119068564612
+      },
+      "q20": {
+        "trades": 46465,
+        "tot_return": 112.12160594636983
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_pos_w_5.csv"
+  },
+  {
+    "name": "pos_w_10",
+    "params": {
+      "name": "pos_w_10",
+      "num_leaves": 20,
+      "learning_rate": 0.02,
+      "scale_pos_weight": 10,
+      "max_depth": 6
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5296412860219185,
+    "test_brier": 0.2499072489010918,
+    "quantile_summary": {
+      "q5": {
+        "trades": 7182,
+        "tot_return": 34.627015425591
+      },
+      "q10": {
+        "trades": 44309,
+        "tot_return": 114.44779883465685
+      },
+      "q20": {
+        "trades": 46465,
+        "tot_return": 112.12160594636983
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_pos_w_10.csv"
+  },
+  {
+    "name": "shallow_lr_pos10",
+    "params": {
+      "name": "shallow_lr_pos10",
+      "num_leaves": 20,
+      "learning_rate": 0.05,
+      "scale_pos_weight": 10,
+      "max_depth": 4
+    },
+    "best_threshold": 0.25,
+    "test_acc": 0.5125793608092112,
+    "test_prec": 0.5125793608092112,
+    "test_rec": 1.0,
+    "test_f1": 0.6777553285336217,
+    "test_auc": 0.5177800799831792,
+    "test_brier": 0.24990704204968778,
+    "quantile_summary": {
+      "q5": {
+        "trades": 7183,
+        "tot_return": 17.86997549731096
+      },
+      "q10": {
+        "trades": 46465,
+        "tot_return": 112.12160594636983
+      },
+      "q20": {
+        "trades": 46465,
+        "tot_return": 112.12160594636983
+      }
+    },
+    "predictions_file": "artifacts/test_predictions_kc_sweep_shallow_lr_pos10.csv"
+  }
+]

@@ -1,4 +1,5 @@
 import pandas as pd
+import csv
 import os
 from datetime import timedelta
 
@@ -22,7 +23,7 @@ df = df.sort_values(ORDER_COLS)
 # Generate holdout/test set: all rows after HOLDOUT_DATE
 holdout_df = df[df[DATE_COL] > HOLDOUT_DATE]
 holdout_file = os.path.join(OUT_DIR, f'holdout_test_after_{HOLDOUT_DATE.date()}.csv')
-holdout_df.to_csv(holdout_file, index=False)
+holdout_df.to_csv(holdout_file, index=False, quoting=csv.QUOTE_MINIMAL)
 print(f'Holdout test set saved to {holdout_file} with {len(holdout_df)} rows.')
 
 # Remove holdout data from main df for walk-forward splits
@@ -59,8 +60,8 @@ while True:
     # Save splits
     train_file = os.path.join(OUT_DIR, f'train_{train_start.date()}_{train_end.date()}.csv')
     val_file = os.path.join(OUT_DIR, f'val_{val_start.date()}_{val_end.date()}.csv')
-    train_df.to_csv(train_file, index=False)
-    val_df.to_csv(val_file, index=False)
+    train_df.to_csv(train_file, index=False, quoting=csv.QUOTE_MINIMAL)
+    val_df.to_csv(val_file, index=False, quoting=csv.QUOTE_MINIMAL)
     splits.append((train_file, val_file))
 
     # Step forward by exactly STEP_MONTHS for both train and val

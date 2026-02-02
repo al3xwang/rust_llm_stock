@@ -1,0 +1,13 @@
+{
+  "members": [
+    "lightgbm",
+    "xgboost",
+    "histgb"
+  ],
+  "best_thr": 0.2,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5580738196599062
+}

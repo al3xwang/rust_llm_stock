@@ -1,0 +1,14 @@
+{
+  "test_period": "20250319 to 20251231",
+  "total_samples": 46465,
+  "direction_accuracy": 0.5125793608092112,
+  "model_total_return": 112.12160594636983,
+  "buyhold_total_return": 112.12160594636983,
+  "outperformance": 0.0,
+  "model_sharpe_ratio": 1.008846278901698,
+  "buyhold_sharpe_ratio": 1.008846278901698,
+  "model_max_drawdown": -1.0,
+  "buyhold_max_drawdown": -1.0,
+  "model_win_rate": 0.5010007532551383,
+  "buyhold_win_rate": 0.5010007532551383
+}

@@ -1,0 +1,143 @@
+======================================================================
+🚀 LIGHTGBM KC - RECALL-FOCUSED TRAINING
+======================================================================
+
+📊 SECTION 1: Loading Data Files
+----------------------------------------------------------------------
+
+🔧 SECTION 2: Data Preprocessing
+----------------------------------------------------------------------
+✅ Data ready: 139400 training samples, 105 features
+
+🧪 SECTION 3: Training Recall-Focused Models
+----------------------------------------------------------------------
+
+======================================================================
+🔬 LowerThreshold: Lower Decision Threshold (0.4)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[12]	train's auc: 0.705167	train's binary_logloss: 0.679805	valid's auc: 0.517849	valid's binary_logloss: 0.693666
+
+📊 Validation Results (threshold=0.4):
+   AUC-ROC:   0.5178
+   Accuracy:  0.5045
+   Precision: 0.5045
+   Recall:    1.0000
+   F1-Score:  0.6706
+   Pred distribution: 0 negatives, 46467 positives
+
+   Test AUC-ROC:   0.5541
+   Test Accuracy:  0.5126
+   Test Precision: 0.5126
+   Test Recall:    1.0000
+   Test F1-Score:  0.6778
+   Test Pred dist: 0 negatives, 46465 positives
+
+======================================================================
+🔬 HighScalePosWeight: High Pos Weight (5.0) - Favor Positive Class
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[3]	train's auc: 0.650666	train's binary_logloss: 0.690973	valid's auc: 0.482045	valid's binary_logloss: 0.693494
+
+📊 Validation Results (threshold=0.5):
+   AUC-ROC:   0.4820
+   Accuracy:  0.4920
+   Precision: 0.4867
+   Recall:    0.1282
+   F1-Score:  0.2029
+   Pred distribution: 40293 negatives, 6174 positives
+
+   Test AUC-ROC:   0.5150
+   Test Accuracy:  0.5219
+   Test Precision: 0.5536
+   Test Recall:    0.3473
+   Test F1-Score:  0.4268
+   Test Pred dist: 31525 negatives, 14940 positives
+
+======================================================================
+🔬 HighScalePosWeight_LowerThreshold: High Pos Weight (5.0) + Lower Threshold (0.35)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[3]	train's auc: 0.650666	train's binary_logloss: 0.690973	valid's auc: 0.482045	valid's binary_logloss: 0.693494
+
+📊 Validation Results (threshold=0.35):
+   AUC-ROC:   0.4820
+   Accuracy:  0.5045
+   Precision: 0.5045
+   Recall:    1.0000
+   F1-Score:  0.6706
+   Pred distribution: 0 negatives, 46467 positives
+
+   Test AUC-ROC:   0.5150
+   Test Accuracy:  0.5126
+   Test Precision: 0.5126
+   Test Recall:    1.0000
+   Test F1-Score:  0.6778
+   Test Pred dist: 0 negatives, 46465 positives
+
+======================================================================
+🔬 VeryHighScalePosWeight: Very High Pos Weight (10.0)
+======================================================================
+Training until validation scores don't improve for 40 rounds
+Early stopping, best iteration is:
+[3]	train's auc: 0.658336	train's binary_logloss: 0.69191	valid's auc: 0.509318	valid's binary_logloss: 0.693092
+
+📊 Validation Results (threshold=0.5):
+   AUC-ROC:   0.5093
+   Accuracy:  0.5069
+   Precision: 0.5060
+   Recall:    0.9489
+   F1-Score:  0.6601
+   Pred distribution: 2506 negatives, 43961 positives
+
+   Test AUC-ROC:   0.5278
+   Test Accuracy:  0.5177
+   Test Precision: 0.5161
+   Test Recall:    0.9473
+   Test F1-Score:  0.6682
+   Test Pred dist: 2747 negatives, 43718 positives
+
+======================================================================
+📊 RECALL-FOCUSED RESULTS COMPARISON
+======================================================================
+
+                           Config  Threshold Val AUC Val Recall Val F1 Test Recall
+                   LowerThreshold       0.40  0.5178     1.0000 0.6706      1.0000
+               HighScalePosWeight       0.50  0.4820     0.1282 0.2029      0.3473
+HighScalePosWeight_LowerThreshold       0.35  0.4820     1.0000 0.6706      1.0000
+           VeryHighScalePosWeight       0.50  0.5093     0.9489 0.6601      0.9473
+
+🏆 BEST MODEL (by F1-Score): LowerThreshold (F1: 0.6706)
+
+======================================================================
+✅ BEST MODEL ANALYSIS
+======================================================================
+
+📋 Configuration: LowerThreshold
+    Decision Threshold: 0.4
+
+   Validation Metrics:
+   AUC-ROC:   0.5178
+   Accuracy:  0.5045
+   Precision: 0.5045
+   Recall:    1.0000
+   F1-Score:  0.6706
+
+   Test Metrics:
+   AUC-ROC:   0.5541
+   Accuracy:  0.5126
+   Precision: 0.5126
+   Recall:    1.0000
+   F1-Score:  0.6778
+
+   Test Confusion Matrix:
+                  Pred -1  Pred 1
+   Actual -1           0    22648
+   Actual  1           0    23817
+
+======================================================================
+✅ RECALL-FOCUSED TRAINING COMPLETE
+======================================================================

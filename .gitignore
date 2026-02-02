@@ -52,6 +52,5 @@ venv/
 *.secret
 龙轩.ini
 src/龙轩.ini
-*.txt
 /libtorch
 /data

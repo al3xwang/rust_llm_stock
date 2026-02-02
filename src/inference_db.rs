@@ -245,7 +245,7 @@ pub struct TestMetrics {
 
 /// Convert database records to StockItem
 pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
-    let values: Vec<[f32; 105]> = records
+    let values: Vec<[f32; 98]> = records
         .iter()
         .map(|r| {
             [
@@ -271,16 +271,11 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
                 r.close_from_open_pct.unwrap_or(0.0) as f32,
                 r.intraday_range_pct.unwrap_or(0.0) as f32,
                 r.close_position_in_range.unwrap_or(0.5) as f32,
-                // [18-25] Moving averages (percentage-based)
-                r.ema_5_pct.unwrap_or(0.0) as f32,
-                r.ema_10_pct.unwrap_or(0.0) as f32,
-                r.ema_20_pct.unwrap_or(0.0) as f32,
-                r.ema_30_pct.unwrap_or(0.0) as f32,
-                r.ema_60_pct.unwrap_or(0.0) as f32,
+                // [18-20] Moving averages (SMAs)
                 r.sma_5.unwrap_or(0.0) as f32,
                 r.sma_10.unwrap_or(0.0) as f32,
                 r.sma_20.unwrap_or(0.0) as f32,
-                // [26-32] MACD
+                // [21-27] MACD
                 r.macd_line.unwrap_or(0.0) as f32,
                 r.macd_signal.unwrap_or(0.0) as f32,
                 r.macd_histogram.unwrap_or(0.0) as f32,
@@ -288,12 +283,12 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
                 r.macd_weekly_signal.unwrap_or(0.0) as f32,
                 r.macd_monthly_line.unwrap_or(0.0) as f32,
                 r.macd_monthly_signal.unwrap_or(0.0) as f32,
-                // [33-36] Technical
+                // [28-31] Technical
                 r.rsi_14.unwrap_or(50.0) as f32,
                 r.kdj_k.unwrap_or(50.0) as f32,
                 r.kdj_d.unwrap_or(50.0) as f32,
                 r.kdj_j.unwrap_or(50.0) as f32,
-                // [37-41] Bollinger Bands (percentage-based)
+                // [32-36] Bollinger Bands (percentage-based)
                 r.bb_upper_pct.unwrap_or(0.0) as f32,
                 r.bb_middle_pct.unwrap_or(0.0) as f32,
                 r.bb_lower_pct.unwrap_or(0.0) as f32,
@@ -315,15 +310,13 @@ pub fn db_records_to_stock_item(records: &[MlTrainingRecord]) -> StockItem {
                 r.body_size.unwrap_or(0.0) as f32,
                 r.upper_shadow.unwrap_or(0.0) as f32,
                 r.lower_shadow.unwrap_or(0.0) as f32,
-                // [55-62] Trend & strength
+                // [55-60] Trend & strength
                 r.trend_strength.unwrap_or(0.0) as f32,
                 r.adx_14.unwrap_or(25.0) as f32,
                 r.vwap_distance_pct.unwrap_or(0.0) as f32,
                 r.cmf_20.unwrap_or(0.0) as f32,
                 50.0 as f32,
-                r.williams_r_14.unwrap_or(-50.0) as f32,
                 r.aroon_up_25.unwrap_or(50.0) as f32,
-                r.aroon_down_25.unwrap_or(50.0) as f32,
                 // [63-65] Lagged returns
                 r.return_lag_1.unwrap_or(0.0) as f32,
                 r.return_lag_2.unwrap_or(0.0) as f32,

@@ -1,0 +1,9 @@
+{
+  "best_config": "Config3_ShallowTrees",
+  "best_description": "Shallow Trees (depth=3, leaves=10)",
+  "val_auc": 0.5293665100484565,
+  "val_accuracy": 0.49551294467041124,
+  "val_f1": 0.0,
+  "test_auc": 0.5055324953114845,
+  "test_accuracy": 0.48742063919078876
+}

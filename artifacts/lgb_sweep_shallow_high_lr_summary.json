@@ -1,0 +1,32 @@
+{
+  "name": "shallow_high_lr",
+  "params": {
+    "name": "shallow_high_lr",
+    "num_leaves": 20,
+    "learning_rate": 0.05,
+    "scale_pos_weight": 1,
+    "max_depth": 4
+  },
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5210724169947267,
+  "test_brier": 0.24990614916129975,
+  "quantile_summary": {
+    "q5": {
+      "trades": 5261,
+      "tot_return": 18.106447426199065
+    },
+    "q10": {
+      "trades": 19166,
+      "tot_return": 59.75473310487517
+    },
+    "q20": {
+      "trades": 21082,
+      "tot_return": 63.03866674505744
+    }
+  },
+  "predictions_file": "artifacts/test_predictions_kc_sweep_shallow_high_lr.csv"
+}

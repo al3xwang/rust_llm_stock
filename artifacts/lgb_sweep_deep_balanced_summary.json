@@ -1,0 +1,32 @@
+{
+  "name": "deep_balanced",
+  "params": {
+    "name": "deep_balanced",
+    "num_leaves": 40,
+    "learning_rate": 0.02,
+    "scale_pos_weight": 1,
+    "max_depth": 10
+  },
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5283319037645563,
+  "test_brier": 0.24990623286329933,
+  "quantile_summary": {
+    "q5": {
+      "trades": 4851,
+      "tot_return": 36.15643358372081
+    },
+    "q10": {
+      "trades": 11316,
+      "tot_return": 45.9250617224081
+    },
+    "q20": {
+      "trades": 22573,
+      "tot_return": 71.51642007199567
+    }
+  },
+  "predictions_file": "artifacts/test_predictions_kc_sweep_deep_balanced.csv"
+}

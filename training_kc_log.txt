@@ -1,0 +1,97 @@
+======================================================================
+🚀 LIGHTGBM KC STOCK MARKET MODEL TRAINING
+======================================================================
+
+📊 SECTION 1: Loading Data Files
+----------------------------------------------------------------------
+✅ Training data: (139400, 118)
+✅ Validation data: (46467, 118)
+✅ Test data: (46465, 118)
+
+🎯 Target variable distribution (before filtering):
+   Training: {-1: 72625, 1: 66775}
+   Validation: {1: 23442, -1: 23025}
+
+   Filtering out Class 0 (neutral) for binary classification...
+
+🎯 Target variable distribution (after filtering):
+   Training: {-1: 72625, 1: 66775}
+   Validation: {1: 23442, -1: 23025}
+
+🔧 SECTION 2: Data Preprocessing
+----------------------------------------------------------------------
+   Numeric features: 71
+   Categorical features: 2
+   Embedding features: 32
+   Total features: 105
+✅ Preprocessing complete
+
+🚀 SECTION 3: Training LightGBM Model
+----------------------------------------------------------------------
+   Class weights: {-1: np.float64(0.9597246127366609), 1: np.float64(1.043803818794459)}
+   Parameters: boosting_type=gbdt, learning_rate=0.02, objective=binary
+   Class balance: 0.919 (balanced)
+   Training...
+Training until validation scores don't improve for 30 rounds
+Early stopping, best iteration is:
+[6]	train's auc: 0.711471	train's binary_logloss: 0.68424	valid's auc: 0.520542	valid's binary_logloss: 0.694176
+✅ Training complete!
+   Best iteration: 6
+   Training AUC: 0.7115
+   Validation AUC: 0.5205
+
+📊 Validation Metrics:
+   Accuracy:  0.4974
+   Precision: 0.8718
+   Recall:    0.0044
+   F1-Score:  0.0087
+   AUC-ROC:   0.5205
+
+📁 SECTION 4: Loading Test Data
+----------------------------------------------------------------------
+✅ Test data loaded: (46465, 118)
+   Target distribution: {1: 23817, -1: 22648}
+✅ Test data preprocessed
+
+🔮 SECTION 5: Generating Test Predictions
+----------------------------------------------------------------------
+   Total predictions: 46465
+   Class -1 (Down): 45988 (99.0%)
+   Class  1 (Up):   477 (1.0%)
+   Probability range: [0.4580, 0.5095]
+✅ Predictions saved to artifacts/test_predictions_kc_lgb.csv
+
+📈 SECTION 6: Model Evaluation
+----------------------------------------------------------------------
+
+✅ Test Set Performance:
+   Accuracy:  0.4961
+   Precision: 0.9203
+   Recall:    0.0184
+   F1-Score:  0.0361
+   AUC-ROC:   0.5474
+
+📋 Confusion Matrix:
+   Classes: -1 (down), 1 (up)
+   Predicted | Actual -1   Actual 1
+   Pred -1   |   22610         38
+   Pred  1   |   23378        439
+
+📊 AUC-ROC Comparison:
+   Training:   0.7115
+   Validation: 0.5205
+   Test:       0.5474
+
+📈 Generating visualizations...
+✅ Evaluation plot saved to artifacts/test_evaluation_kc_lgb.png
+
+======================================================================
+✅ LIGHTGBM TRAINING AND EVALUATION COMPLETE
+======================================================================
+📊 Results Summary:
+   - Model saved internally
+   - Predictions: artifacts/test_predictions_kc_lgb.csv
+   - Evaluation plot: ./artifacts/test_evaluation_kc_lgb.png
+   - Feature count: 105
+   - Test AUC-ROC: 0.5474
+======================================================================

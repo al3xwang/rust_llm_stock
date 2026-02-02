@@ -1,4 +1,4 @@
-pub const FEATURE_SIZE: usize = 105;
+pub const FEATURE_SIZE: usize = 98;
 
 // Calibration: for percentage-based features, we want denormalized values in ±15% range.
 // tanh(x) ≈ ±0.95 at x ≈ ±3, so we use a scale that maps 0.95 -> ~10-12%.

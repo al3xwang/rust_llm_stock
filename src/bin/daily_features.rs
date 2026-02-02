@@ -198,7 +198,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 /// Extract 105 features from a database record
 /// Follows the layout from src/dataset.rs StockItem
-fn extract_features_from_record(record: &MlTrainingRecord) -> [f32; 105] {
+fn extract_features_from_record(record: &MlTrainingRecord) -> [f32; 98] {
     [
         // [0-2] Categorical (placeholder - would be label-encoded)
         0.0,
@@ -223,12 +223,7 @@ fn extract_features_from_record(record: &MlTrainingRecord) -> [f32; 105] {
         record.close_from_open_pct.unwrap_or(0.0) as f32,
         record.intraday_range_pct.unwrap_or(0.0) as f32,
         record.close_position_in_range.unwrap_or(0.5) as f32,
-        // [18-25] Moving averages
-        record.ema_5.unwrap_or(0.0) as f32,
-        record.ema_10.unwrap_or(0.0) as f32,
-        record.ema_20.unwrap_or(0.0) as f32,
-        record.ema_30.unwrap_or(0.0) as f32,
-        record.ema_60.unwrap_or(0.0) as f32,
+        // [18-20] Moving averages (SMAs)
         record.sma_5.unwrap_or(0.0) as f32,
         record.sma_10.unwrap_or(0.0) as f32,
         record.sma_20.unwrap_or(0.0) as f32,
@@ -267,15 +262,13 @@ fn extract_features_from_record(record: &MlTrainingRecord) -> [f32; 105] {
         record.body_size.unwrap_or(0.0) as f32,
         record.upper_shadow.unwrap_or(0.0) as f32,
         record.lower_shadow.unwrap_or(0.0) as f32,
-        // [55-62] Trend & strength
+        // [55-60] Trend & strength
         record.trend_strength.unwrap_or(0.0) as f32,
         record.adx_14.unwrap_or(25.0) as f32,
         record.vwap_distance_pct.unwrap_or(0.0) as f32,
         record.cmf_20.unwrap_or(0.0) as f32,
         50.0 as f32,
-        record.williams_r_14.unwrap_or(-50.0) as f32,
         record.aroon_up_25.unwrap_or(50.0) as f32,
-        record.aroon_down_25.unwrap_or(50.0) as f32,
         // [63-65] Lagged returns
         record.return_lag_1.unwrap_or(0.0) as f32,
         record.return_lag_2.unwrap_or(0.0) as f32,

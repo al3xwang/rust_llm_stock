@@ -1,0 +1,13 @@
+{
+  "min_recall_constraint": 0.6,
+  "selected_threshold": 0.622,
+  "val_precision": 0.741988193126713,
+  "val_recall": 0.600503370019623,
+  "test_total_strategy_return": 13.3967969757008,
+  "test_total_buyhold_return": 0.5187944565182361,
+  "mean_daily_return": 0.013844453769389939,
+  "std_daily_return": 0.012597235611815432,
+  "annual_sharpe": 17.446199868,
+  "max_drawdown": -0.005497329586428505,
+  "n_trades": 14132
+}

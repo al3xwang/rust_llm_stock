@@ -1,0 +1,32 @@
+{
+  "name": "pos_w_5",
+  "params": {
+    "name": "pos_w_5",
+    "num_leaves": 20,
+    "learning_rate": 0.02,
+    "scale_pos_weight": 5,
+    "max_depth": 6
+  },
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5218960421189315,
+  "test_brier": 0.24990640382018248,
+  "quantile_summary": {
+    "q5": {
+      "trades": 6464,
+      "tot_return": 37.076925929379485
+    },
+    "q10": {
+      "trades": 45747,
+      "tot_return": 104.53119068564612
+    },
+    "q20": {
+      "trades": 46465,
+      "tot_return": 112.12160594636983
+    }
+  },
+  "predictions_file": "artifacts/test_predictions_kc_sweep_pos_w_5.csv"
+}

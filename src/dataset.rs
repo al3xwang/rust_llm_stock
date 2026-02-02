@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct StockItem {
-    // 105 features (updated for percentage-based schema):
+    // 98 features (EMAs, PS, and market-cap related features removed)
     // ... (doc omitted for brevity)
-    pub values: Vec<[f32; 105]>,
+    pub values: Vec<[f32; 98]>,
+
     // metadata for sample weighting
     pub last_trade_date: Option<String>, // YYYYMMDD of the last timestep in sequence
     pub dataset_last_date: Option<String>, // most recent date available for that stock dataset
@@ -33,7 +34,7 @@ impl DummyStockDataset {
             return None;
         }
         // Generate deterministic "random" float data (sine wave pattern)
-        let mut values: Vec<[f32; 105]> = Vec::with_capacity(self.seq_len);
+        let mut values: Vec<[f32; 98]> = Vec::with_capacity(self.seq_len);
         for i in 0..self.seq_len {
             let t = (index * self.seq_len + i) as f32;
             // Base price movement
@@ -47,7 +48,7 @@ impl DummyStockDataset {
             let volume = (base * 1000.0).abs();
             let amount = volume * close;
 
-            // Create 105-feature array for dummy data
+            // Create 98-feature array for dummy data
             values.push([
                 // [0-2] Categorical (dummy)
                 0.0,
@@ -88,12 +89,7 @@ impl DummyStockDataset {
                 0.0,
                 0.0,
                 0.5,
-                // [18-25] Moving averages (EMAs + SMAs)
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                // [18-20] Moving averages (SMAs)
                 0.0,
                 0.0,
                 0.0,
@@ -132,13 +128,11 @@ impl DummyStockDataset {
                 0.0,
                 0.0,
                 0.0,
-                // [55-62] Trend & strength
+                // [55-60] Trend & strength
                 0.0,
                 25.0,
                 0.0,
                 0.0,
-                50.0,
-                -50.0,
                 50.0,
                 50.0,
                 // [63-65] Lagged returns
@@ -455,12 +449,7 @@ impl DbStockDataset {
                 record.close_from_open_pct.unwrap_or(0.0) as f32,
                 record.intraday_range_pct.unwrap_or(0.0) as f32,
                 record.close_position_in_range.unwrap_or(0.5) as f32,
-                // [18-25] Moving averages (EMAs + SMAs)
-                record.ema_5.unwrap_or(0.0) as f32,
-                record.ema_10.unwrap_or(0.0) as f32,
-                record.ema_20.unwrap_or(0.0) as f32,
-                record.ema_30.unwrap_or(0.0) as f32,
-                record.ema_60.unwrap_or(0.0) as f32,
+                // [18-20] Moving averages (SMAs)
                 record.sma_5.unwrap_or(0.0) as f32,
                 record.sma_10.unwrap_or(0.0) as f32,
                 record.sma_20.unwrap_or(0.0) as f32,
@@ -505,9 +494,7 @@ impl DbStockDataset {
                 record.vwap_distance_pct.unwrap_or(0.0) as f32,
                 record.cmf_20.unwrap_or(0.0) as f32,
                 50.0 as f32,
-                record.williams_r_14.unwrap_or(-50.0) as f32,
                 record.aroon_up_25.unwrap_or(50.0) as f32,
-                record.aroon_down_25.unwrap_or(50.0) as f32,
                 // [63-65] Lagged returns
                 record.return_lag_1.unwrap_or(0.0) as f32,
                 record.return_lag_2.unwrap_or(0.0) as f32,

@@ -1,0 +1,35 @@
+========================================================================
+🚀 KC MODEL RETRAINING & BACKTESTING PIPELINE
+========================================================================
+
+📊 This pipeline will:
+   1. Verify training data availability
+   2. Train stacked ensemble model (LightGBM + XGBoost + MLP)
+   3. Generate test predictions with probability calibration
+   4. Run comprehensive backtest analysis
+   5. Generate performance reports and visualizations
+
+📁 Working directory: /Users/alex/rust_llm_stock
+
+========================================================================
+Step 1: Verifying Training Data
+========================================================================
+✅ Training data verified:
+   📂 kc_train.csv: 243978 rows
+   📂 kc_val.csv:   81406 rows
+   📂 kc_test.csv:  80853 rows
+
+========================================================================
+Step 2: Training Stacked Ensemble Model
+========================================================================
+🤖 Training models with upsampling and class-weight tuning...
+   - LightGBM base models with various scale_pos_weights
+   - XGBoost models with sample weights
+   - MLP (Neural Network) classifiers
+   - Probability calibration on validation set
+   - Logistic regression stacker
+
+Traceback (most recent call last):
+  File "/Users/alex/rust_llm_stock/py/train_kc_sampling_and_stack.py", line 14, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

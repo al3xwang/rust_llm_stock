@@ -146,20 +146,20 @@ impl DbClient {
             .query(
                 "SELECT  ts_code, trade_date, industry, act_ent_type, volume, amount, month, weekday, quarter, week_no,
             open_pct, high_pct, low_pct, close_pct, high_from_open_pct, low_from_open_pct, close_from_open_pct,
-            intraday_range_pct, close_position_in_range, ema_5, ema_10, ema_20, ema_30, ema_60, sma_5, sma_10, sma_20,
+            intraday_range_pct, close_position_in_range, sma_5, sma_10, sma_20,
             macd_line, macd_signal, macd_histogram, macd_weekly_line, macd_weekly_signal, macd_monthly_line, macd_monthly_signal,
             rsi_14, kdj_k, kdj_d, kdj_j, bb_upper, bb_middle, bb_lower, bb_bandwidth, bb_percent_b, atr, volatility_5, volatility_20,
             asi, obv, volume_ratio, price_momentum_5, price_momentum_10, price_momentum_20, price_position_52w, body_size,
-            upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, williams_r_14, aroon_up_25,
-            aroon_down_25, return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
+            upper_shadow, lower_shadow, trend_strength, adx_14, vwap_distance_pct, cmf_20, aroon_up_25,
+            return_lag_1, return_lag_2, return_lag_3, overnight_gap, gap_pct, volume_roc_5, volume_spike,
             price_roc_5, price_roc_10, price_roc_20, hist_volatility_20, is_doji, is_hammer, is_shooting_star, consecutive_days,
             index_csi300_pct_chg, index_csi300_vs_ma5_pct, index_csi300_vs_ma20_pct, index_chinext_pct_chg, index_chinext_vs_ma5_pct,
             index_chinext_vs_ma20_pct, index_xin9_pct_chg, index_xin9_vs_ma5_pct, index_xin9_vs_ma20_pct,
             index_hsi_pct_chg, index_hsi_vs_ma5_pct, index_hsi_vs_ma20_pct,
             fx_usdcnh_pct_chg, fx_usdcnh_vs_ma5_pct, fx_usdcnh_vs_ma20_pct,
             net_mf_vol, net_mf_amount, smart_money_ratio, large_order_flow,
-            turnover_rate, turnover_rate_f, /* volume_ratio, */ pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm, total_share, float_share,
-            free_share, total_mv, circ_mv,
+            turnover_rate, turnover_rate_f, /* volume_ratio, */ pe, pe_ttm, pb, dv_ratio, dv_ttm, total_share, float_share,
+            free_share,
             vol_percentile, high_vol_regime, 
             pe_percentile_52w, sector_momentum_vs_market, volume_accel_5d, price_vs_52w_high, consecutive_up_days,
             next_day_return,
@@ -284,554 +284,112 @@ impl DbClient {
     fn parse_ml_records(&self, rows: Vec<tokio_postgres::Row>) -> Vec<MlTrainingRecord> {
         rows.into_iter()
             .map(|row| {
-                let mut idx = 0;
+                // Use name-based column access to be resilient to schema changes
                 MlTrainingRecord {
-                    ts_code: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    trade_date: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    industry: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    act_ent_type: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
+                    ts_code: row.get("ts_code"),
+                    trade_date: row.get("trade_date"),
+                    industry: row.get::<_, Option<String>>("industry"),
+                    act_ent_type: row.get::<_, Option<String>>("act_ent_type"),
                     // province REMOVED
-                    volume: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    amount: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    month: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
-                    weekday: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
-                    quarter: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
-                    weekno: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
-                    open_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    high_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    low_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    close_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    high_from_open_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    low_from_open_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    close_from_open_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    intraday_range_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    close_position_in_range: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    ema_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    ema_10: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    ema_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    ema_30: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    ema_60: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    sma_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    sma_10: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    sma_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_line: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_signal: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_histogram: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_weekly_line: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_weekly_signal: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_monthly_line: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    macd_monthly_signal: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    rsi_14: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    kdj_k: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    kdj_d: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    kdj_j: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    bb_upper: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    bb_middle: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    bb_lower: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    bb_bandwidth: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    bb_percent_b: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    atr: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volatility_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volatility_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    asi: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    obv: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volume_ratio: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_momentum_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_momentum_10: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_momentum_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_position_52w: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    body_size: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    upper_shadow: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    lower_shadow: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    trend_strength: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    adx_14: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    vwap_distance_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    cmf_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    williams_r_14: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    aroon_up_25: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    aroon_down_25: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    return_lag_1: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    return_lag_2: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    return_lag_3: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    overnight_gap: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    gap_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volume_roc_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volume_spike: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_roc_5: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_roc_10: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_roc_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    hist_volatility_20: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    is_doji: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    is_hammer: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    is_shooting_star: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    consecutive_days: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_csi300_pct_chg: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_csi300_vs_ma5_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_csi300_vs_ma20_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_xin9_pct_chg: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_xin9_vs_ma5_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_xin9_vs_ma20_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_chinext_pct_chg: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_chinext_vs_ma5_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_chinext_vs_ma20_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_hsi_pct_chg: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_hsi_vs_ma5_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    index_hsi_vs_ma20_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    fx_usdcnh_pct_chg: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    fx_usdcnh_vs_ma5_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    fx_usdcnh_vs_ma20_pct: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    net_mf_vol: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    net_mf_amount: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    smart_money_ratio: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    large_order_flow: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    industry_avg_return: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    stock_vs_industry: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    industry_momentum_5d: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    vol_percentile: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    high_vol_regime: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
-                    pe_percentile_52w: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    sector_momentum_vs_market: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    volume_accel_5d: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    price_vs_52w_high: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    consecutive_up_days: {
-                        let v = row.get::<_, Option<i32>>(idx);
-                        idx += 1;
-                        v
-                    },
-                    next_day_return: {
-                        let v = row.get(idx);
-                        idx += 1;
-                        v
-                    },
-                    next_day_direction: {
-                        let v = row.get::<_, Option<i16>>(idx).map(|v| v as i32);
-                        idx += 1;
-                        v
-                    },
+                    volume: row.get("volume"),
+                    amount: row.get::<_, Option<f64>>("amount"),
+                    month: row.get::<_, Option<i16>>("month").map(|v| v as i32),
+                    weekday: row.get::<_, Option<i16>>("weekday").map(|v| v as i32),
+                    quarter: row.get::<_, Option<i16>>("quarter").map(|v| v as i32),
+                    weekno: row.get::<_, Option<i16>>("week_no").map(|v| v as i32),
+                    open_pct: row.get::<_, Option<f64>>("open_pct"),
+                    high_pct: row.get::<_, Option<f64>>("high_pct"),
+                    low_pct: row.get::<_, Option<f64>>("low_pct"),
+                    close_pct: row.get::<_, Option<f64>>("close_pct"),
+                    high_from_open_pct: row.get::<_, Option<f64>>("high_from_open_pct"),
+                    low_from_open_pct: row.get::<_, Option<f64>>("low_from_open_pct"),
+                    close_from_open_pct: row.get::<_, Option<f64>>("close_from_open_pct"),
+                    intraday_range_pct: row.get::<_, Option<f64>>("intraday_range_pct"),
+                    close_position_in_range: row.get::<_, Option<f64>>("close_position_in_range"),
+
+                    sma_5: row.get::<_, Option<f64>>("sma_5"),
+                    sma_10: row.get::<_, Option<f64>>("sma_10"),
+                    sma_20: row.get::<_, Option<f64>>("sma_20"),
+                    macd_line: row.get::<_, Option<f64>>("macd_line"),
+                    macd_signal: row.get::<_, Option<f64>>("macd_signal"),
+                    macd_histogram: row.get::<_, Option<f64>>("macd_histogram"),
+                    macd_weekly_line: row.get::<_, Option<f64>>("macd_weekly_line"),
+                    macd_weekly_signal: row.get::<_, Option<f64>>("macd_weekly_signal"),
+                    macd_monthly_line: row.get::<_, Option<f64>>("macd_monthly_line"),
+                    macd_monthly_signal: row.get::<_, Option<f64>>("macd_monthly_signal"),
+                    rsi_14: row.get::<_, Option<f64>>("rsi_14"),
+                    kdj_k: row.get::<_, Option<f64>>("kdj_k"),
+                    kdj_d: row.get::<_, Option<f64>>("kdj_d"),
+                    kdj_j: row.get::<_, Option<f64>>("kdj_j"),
+                    bb_upper: row.get::<_, Option<f64>>("bb_upper"),
+                    bb_middle: row.get::<_, Option<f64>>("bb_middle"),
+                    bb_lower: row.get::<_, Option<f64>>("bb_lower"),
+                    bb_bandwidth: row.get::<_, Option<f64>>("bb_bandwidth"),
+                    bb_percent_b: row.get::<_, Option<f64>>("bb_percent_b"),
+                    atr: row.get::<_, Option<f64>>("atr"),
+                    volatility_5: row.get::<_, Option<f64>>("volatility_5"),
+                    volatility_20: row.get::<_, Option<f64>>("volatility_20"),
+                    asi: row.get::<_, Option<f64>>("asi"),
+                    obv: row.get::<_, Option<f64>>("obv"),
+                    volume_ratio: row.get::<_, Option<f64>>("volume_ratio"),
+                    price_momentum_5: row.get::<_, Option<f64>>("price_momentum_5"),
+                    price_momentum_10: row.get::<_, Option<f64>>("price_momentum_10"),
+                    price_momentum_20: row.get::<_, Option<f64>>("price_momentum_20"),
+                    price_position_52w: row.get::<_, Option<f64>>("price_position_52w"),
+                    body_size: row.get::<_, Option<f64>>("body_size"),
+                    upper_shadow: row.get::<_, Option<f64>>("upper_shadow"),
+                    lower_shadow: row.get::<_, Option<f64>>("lower_shadow"),
+                    trend_strength: row.get::<_, Option<f64>>("trend_strength"),
+                    adx_14: row.get::<_, Option<f64>>("adx_14"),
+                    vwap_distance_pct: row.get::<_, Option<f64>>("vwap_distance_pct"),
+                    cmf_20: row.get::<_, Option<f64>>("cmf_20"),
+                    aroon_up_25: row.get::<_, Option<f64>>("aroon_up_25"),
+                    return_lag_1: row.get::<_, Option<f64>>("return_lag_1"),
+                    return_lag_2: row.get::<_, Option<f64>>("return_lag_2"),
+                    return_lag_3: row.get::<_, Option<f64>>("return_lag_3"),
+                    overnight_gap: row.get::<_, Option<f64>>("overnight_gap"),
+                    gap_pct: row.get::<_, Option<f64>>("gap_pct"),
+                    volume_roc_5: row.get::<_, Option<f64>>("volume_roc_5"),
+                    volume_spike: row.get::<_, Option<bool>>("volume_spike"),
+                    price_roc_5: row.get::<_, Option<f64>>("price_roc_5"),
+                    price_roc_10: row.get::<_, Option<f64>>("price_roc_10"),
+                    price_roc_20: row.get::<_, Option<f64>>("price_roc_20"),
+                    hist_volatility_20: row.get::<_, Option<f64>>("hist_volatility_20"),
+                    is_doji: row.get::<_, Option<bool>>("is_doji"),
+                    is_hammer: row.get::<_, Option<bool>>("is_hammer"),
+                    is_shooting_star: row.get::<_, Option<bool>>("is_shooting_star"),
+                    consecutive_days: row.get::<_, Option<i32>>("consecutive_days"),
+                    index_csi300_pct_chg: row.get::<_, Option<f64>>("index_csi300_pct_chg"),
+                    index_csi300_vs_ma5_pct: row.get::<_, Option<f64>>("index_csi300_vs_ma5_pct"),
+                    index_csi300_vs_ma20_pct: row.get::<_, Option<f64>>("index_csi300_vs_ma20_pct"),
+                    index_xin9_pct_chg: row.get::<_, Option<f64>>("index_xin9_pct_chg"),
+                    index_xin9_vs_ma5_pct: row.get::<_, Option<f64>>("index_xin9_vs_ma5_pct"),
+                    index_xin9_vs_ma20_pct: row.get::<_, Option<f64>>("index_xin9_vs_ma20_pct"),
+                    index_chinext_pct_chg: row.get::<_, Option<f64>>("index_chinext_pct_chg"),
+                    index_chinext_vs_ma5_pct: row.get::<_, Option<f64>>("index_chinext_vs_ma5_pct"),
+                    index_chinext_vs_ma20_pct: row.get::<_, Option<f64>>("index_chinext_vs_ma20_pct"),
+                    index_hsi_pct_chg: row.get::<_, Option<f64>>("index_hsi_pct_chg"),
+                    index_hsi_vs_ma5_pct: row.get::<_, Option<f64>>("index_hsi_vs_ma5_pct"),
+                    index_hsi_vs_ma20_pct: row.get::<_, Option<f64>>("index_hsi_vs_ma20_pct"),
+                    fx_usdcnh_pct_chg: row.get::<_, Option<f64>>("fx_usdcnh_pct_chg"),
+                    fx_usdcnh_vs_ma5_pct: row.get::<_, Option<f64>>("fx_usdcnh_vs_ma5_pct"),
+                    fx_usdcnh_vs_ma20_pct: row.get::<_, Option<f64>>("fx_usdcnh_vs_ma20_pct"),
+                    net_mf_vol: row.get::<_, Option<f64>>("net_mf_vol"),
+                    net_mf_amount: row.get::<_, Option<f64>>("net_mf_amount"),
+                    smart_money_ratio: row.get::<_, Option<f64>>("smart_money_ratio"),
+                    large_order_flow: row.get::<_, Option<f64>>("large_order_flow"),
+                    industry_avg_return: row.get::<_, Option<f64>>("industry_avg_return"),
+                    stock_vs_industry: row.get::<_, Option<f64>>("stock_vs_industry"),
+                    industry_momentum_5d: row.get::<_, Option<f64>>("industry_momentum_5d"),
+                    vol_percentile: row.get::<_, Option<f64>>("vol_percentile"),
+                    high_vol_regime: row.get::<_, Option<i16>>("high_vol_regime").map(|v| v as i32),
+                    pe_percentile_52w: row.get::<_, Option<f64>>("pe_percentile_52w"),
+                    sector_momentum_vs_market: row.get::<_, Option<f64>>("sector_momentum_vs_market"),
+                    volume_accel_5d: row.get::<_, Option<f64>>("volume_accel_5d"),
+                    price_vs_52w_high: row.get::<_, Option<f64>>("price_vs_52w_high"),
+                    consecutive_up_days: row.get::<_, Option<i32>>("consecutive_up_days"),
+                    next_day_return: row.get::<_, Option<f64>>("next_day_return"),
+                    next_day_direction: row.get::<_, Option<i16>>("next_day_direction").map(|v| v as i32),
                 }
             })
             .collect()
@@ -868,58 +426,53 @@ impl DbClient {
         rows.into_iter()
             .map(|row| {
                 // Read columns 0-88 from actual database values
-                let ts_code: String = row.get(0);
-                let trade_date: String = row.get(1);
-                let industry: Option<String> = row.get(2);
-                let act_ent_type: Option<String> = row.get(3);
-                let volume: f64 = row.get(4);
-                let amount: Option<f64> = row.get(5);
-                let month: Option<i32> = row.get::<_, Option<i16>>(6).map(|v| v as i32);
-                let weekday: Option<i32> = row.get::<_, Option<i16>>(7).map(|v| v as i32);
-                let quarter: Option<i32> = row.get::<_, Option<i16>>(8).map(|v| v as i32);
-                let weekno: Option<i32> = row.get::<_, Option<i16>>(9).map(|v| v as i32);
-                let open_pct: Option<f64> = row.get(10);
-                let high_pct: Option<f64> = row.get(11);
-                let low_pct: Option<f64> = row.get(12);
-                let close_pct: Option<f64> = row.get(13);
-                let high_from_open_pct: Option<f64> = row.get(14);
-                let low_from_open_pct: Option<f64> = row.get(15);
-                let close_from_open_pct: Option<f64> = row.get(16);
-                let intraday_range_pct: Option<f64> = row.get(17);
-                let close_position_in_range: Option<f64> = row.get(18);
-                let ema_5: Option<f64> = row.get(19);
-                let ema_10: Option<f64> = row.get(20);
-                let ema_20: Option<f64> = row.get(21);
-                let ema_30: Option<f64> = row.get(22);
-                let ema_60: Option<f64> = row.get(23);
-                let sma_5: Option<f64> = row.get(24);
-                let sma_10: Option<f64> = row.get(25);
-                let sma_20: Option<f64> = row.get(26);
-                let macd_line: Option<f64> = row.get(27);
-                let macd_signal: Option<f64> = row.get(28);
-                let macd_histogram: Option<f64> = row.get(29);
-                let macd_weekly_line: Option<f64> = row.get(30);
-                let macd_weekly_signal: Option<f64> = row.get(31);
-                let macd_monthly_line: Option<f64> = row.get(32);
-                let macd_monthly_signal: Option<f64> = row.get(33);
-                let rsi_14: Option<f64> = row.get(34);
-                let kdj_k: Option<f64> = row.get(35);
-                let kdj_d: Option<f64> = row.get(36);
-                let kdj_j: Option<f64> = row.get(37);
-                let bb_upper: Option<f64> = row.get(38);
-                let bb_middle: Option<f64> = row.get(39);
-                let bb_lower: Option<f64> = row.get(40);
-                let bb_bandwidth: Option<f64> = row.get(41);
-                let bb_percent_b: Option<f64> = row.get(42);
-                let atr: Option<f64> = row.get(43);
-                let volatility_5: Option<f64> = row.get(44);
-                let volatility_20: Option<f64> = row.get(45);
-                let asi: Option<f64> = row.get(46);
-                let obv: Option<f64> = row.get(47);
-                let volume_ratio: Option<f64> = row.get(48);
-                let price_momentum_5: Option<f64> = row.get(49);
-                let price_momentum_10: Option<f64> = row.get(50);
-                let price_momentum_20: Option<f64> = row.get(51);
+                let ts_code: String = row.get("ts_code");
+                let trade_date: String = row.get("trade_date");
+                let industry: Option<String> = row.get("industry");
+                let act_ent_type: Option<String> = row.get("act_ent_type");
+                let volume: f64 = row.get("volume");
+                let amount: Option<f64> = row.get("amount");
+                let month: Option<i32> = row.get::<_, Option<i16>>("month").map(|v| v as i32);
+                let weekday: Option<i32> = row.get::<_, Option<i16>>("weekday").map(|v| v as i32);
+                let quarter: Option<i32> = row.get::<_, Option<i16>>("quarter").map(|v| v as i32);
+                let weekno: Option<i32> = row.get::<_, Option<i16>>("weekno").map(|v| v as i32);
+                let open_pct: Option<f64> = row.get("open_pct");
+                let high_pct: Option<f64> = row.get("high_pct");
+                let low_pct: Option<f64> = row.get("low_pct");
+                let close_pct: Option<f64> = row.get("close_pct");
+                let high_from_open_pct: Option<f64> = row.get("high_from_open_pct");
+                let low_from_open_pct: Option<f64> = row.get("low_from_open_pct");
+                let close_from_open_pct: Option<f64> = row.get("close_from_open_pct");
+                let intraday_range_pct: Option<f64> = row.get("intraday_range_pct");
+                let close_position_in_range: Option<f64> = row.get("close_position_in_range");
+                let sma_5: Option<f64> = row.get("sma_5");
+                let sma_10: Option<f64> = row.get("sma_10");
+                let sma_20: Option<f64> = row.get("sma_20");
+                let macd_line: Option<f64> = row.get("macd_line");
+                let macd_signal: Option<f64> = row.get("macd_signal");
+                let macd_histogram: Option<f64> = row.get("macd_histogram");
+                let macd_weekly_line: Option<f64> = row.get("macd_weekly_line");
+                let macd_weekly_signal: Option<f64> = row.get("macd_weekly_signal");
+                let macd_monthly_line: Option<f64> = row.get("macd_monthly_line");
+                let macd_monthly_signal: Option<f64> = row.get("macd_monthly_signal");
+                let rsi_14: Option<f64> = row.get("rsi_14");
+                let kdj_k: Option<f64> = row.get("kdj_k");
+                let kdj_d: Option<f64> = row.get("kdj_d");
+                let kdj_j: Option<f64> = row.get("kdj_j");
+                let bb_upper: Option<f64> = row.get("bb_upper");
+                let bb_middle: Option<f64> = row.get("bb_middle");
+                let bb_lower: Option<f64> = row.get("bb_lower");
+                let bb_bandwidth: Option<f64> = row.get("bb_bandwidth");
+                let bb_percent_b: Option<f64> = row.get("bb_percent_b");
+                let atr: Option<f64> = row.get("atr");
+                let volatility_5: Option<f64> = row.get("volatility_5");
+                let volatility_20: Option<f64> = row.get("volatility_20");
+                let asi: Option<f64> = row.get("asi");
+                let obv: Option<f64> = row.get("obv");
+                let volume_ratio: Option<f64> = row.get("volume_ratio");
+                let price_momentum_5: Option<f64> = row.get("price_momentum_5");
+                let price_momentum_10: Option<f64> = row.get("price_momentum_10");
+                let price_momentum_20: Option<f64> = row.get("price_momentum_20");
                 let price_position_52w: Option<f64> = row.get(52);
                 let body_size: Option<f64> = row.get(53);
                 let upper_shadow: Option<f64> = row.get(54);
@@ -928,9 +481,7 @@ impl DbClient {
                 let adx_14: Option<f64> = row.get(57);
                 let vwap_distance_pct: Option<f64> = row.get(58);
                 let cmf_20: Option<f64> = row.get(59);
-                let williams_r_14: Option<f64> = row.get(60);
                 let aroon_up_25: Option<f64> = row.get(61);
-                let aroon_down_25: Option<f64> = row.get(62);
                 let return_lag_1: Option<f64> = row.get(63);
                 let return_lag_2: Option<f64> = row.get(64);
                 let return_lag_3: Option<f64> = row.get(65);
@@ -955,21 +506,21 @@ impl DbClient {
                 let index_xin9_pct_chg: Option<f64> = row.get(84);
                 let index_xin9_vs_ma5_pct: Option<f64> = row.get(85);
                 let index_xin9_vs_ma20_pct: Option<f64> = row.get(86);
-                let vol_percentile: Option<f64> = row.try_get(87).ok();
+                let vol_percentile: Option<f64> = row.try_get("vol_percentile").ok();
                 let high_vol_regime: Option<i32> = row
-                    .try_get::<_, Option<i16>>(88)
+                    .try_get::<_, Option<i16>>("high_vol_regime")
                     .ok()
                     .flatten()
                     .map(|v| v as i32);
                 // NEW: 5 predictive features
-                let pe_percentile_52w: Option<f64> = row.try_get(89).ok();
-                let sector_momentum_vs_market: Option<f64> = row.try_get(90).ok();
-                let volume_accel_5d: Option<f64> = row.try_get(91).ok();
-                let price_vs_52w_high: Option<f64> = row.try_get(92).ok();
-                let consecutive_up_days: Option<i32> = row.try_get(93).ok();
+                let pe_percentile_52w: Option<f64> = row.try_get("pe_percentile_52w").ok();
+                let sector_momentum_vs_market: Option<f64> = row.try_get("sector_momentum_vs_market").ok();
+                let volume_accel_5d: Option<f64> = row.try_get("volume_accel_5d").ok();
+                let price_vs_52w_high: Option<f64> = row.try_get("price_vs_52w_high").ok();
+                let consecutive_up_days: Option<i32> = row.try_get("consecutive_up_days").ok();
                 // Columns 94+ are hard-coded dummy values (next_day_return, next_day_direction, turnover_rate, etc.)
-                let next_day_return: Option<f64> = row.try_get(94).ok();
-                let next_day_direction: Option<i32> = row.try_get::<_, i32>(95).ok();
+                let next_day_return: Option<f64> = row.try_get("next_day_return").ok();
+                let next_day_direction: Option<i32> = row.try_get::<_, i32>("next_day_direction").ok();
 
                 MlTrainingRecord {
                     ts_code,
@@ -991,11 +542,6 @@ impl DbClient {
                     close_from_open_pct,
                     intraday_range_pct,
                     close_position_in_range,
-                    ema_5,
-                    ema_10,
-                    ema_20,
-                    ema_30,
-                    ema_60,
                     sma_5,
                     sma_10,
                     sma_20,
@@ -1032,9 +578,7 @@ impl DbClient {
                     adx_14,
                     vwap_distance_pct,
                     cmf_20,
-                    williams_r_14,
                     aroon_up_25,
-                    aroon_down_25,
                     return_lag_1,
                     return_lag_2,
                     return_lag_3,
@@ -1249,11 +793,6 @@ pub struct MlTrainingRecord {
     pub intraday_range_pct: Option<f64>,
     pub close_position_in_range: Option<f64>,
     // Moving Averages
-    pub ema_5: Option<f64>,
-    pub ema_10: Option<f64>,
-    pub ema_20: Option<f64>,
-    pub ema_30: Option<f64>,
-    pub ema_60: Option<f64>,
     pub sma_5: Option<f64>,
     pub sma_10: Option<f64>,
     pub sma_20: Option<f64>,
@@ -1297,9 +836,7 @@ pub struct MlTrainingRecord {
     pub adx_14: Option<f64>,
     pub vwap_distance_pct: Option<f64>,
     pub cmf_20: Option<f64>,
-    pub williams_r_14: Option<f64>,
     pub aroon_up_25: Option<f64>,
-    pub aroon_down_25: Option<f64>,
     // Lagged returns
     pub return_lag_1: Option<f64>,
     pub return_lag_2: Option<f64>,
@@ -1886,9 +1423,7 @@ impl DbClient {
             0.5
         };
 
-        // Calculate EMAs and SMAs
-        let (ema_5, ema_10, ema_20, ema_30, ema_60) =
-            self.calculate_emas(historical_data, current_idx);
+        // Calculate SMAs
         let (sma_5, sma_10, sma_20) = self.calculate_smas(historical_data, current_idx);
 
         // MACD indicators
@@ -1995,7 +1530,7 @@ impl DbClient {
         let (next_day_return, next_day_direction) = if current_idx + 1 < historical_data.len() {
             let next_close = historical_data[current_idx + 1].close;
             let ret = (next_close - record.close) / record.close * 100.0; // Convert to percentage to match feature scale
-            let dir = if ret > 0.0 { 1 } else { 0 };
+            let dir = if ret >= 0.0 { 1 } else { -1 };  // Binary: 1 (up) or -1 (down)
             (Some(ret), Some(dir))
         } else {
             (None, None)
@@ -2022,11 +1557,6 @@ impl DbClient {
             close_from_open_pct: Some(close_from_open_pct),
             intraday_range_pct: Some(intraday_range_pct),
             close_position_in_range: Some(close_position),
-            ema_5: Some(ema_5),
-            ema_10: Some(ema_10),
-            ema_20: Some(ema_20),
-            ema_30: Some(ema_30),
-            ema_60: Some(ema_60),
             sma_5: Some(sma_5),
             sma_10: Some(sma_10),
             sma_20: Some(sma_20),
@@ -2063,9 +1593,7 @@ impl DbClient {
             adx_14: Some(adx_14),
             vwap_distance_pct: Some(vwap_distance_pct),
             cmf_20: Some(cmf_20),
-            williams_r_14: Some(williams_r_14),
             aroon_up_25: Some(aroon_up),
-            aroon_down_25: Some(aroon_down),
             return_lag_1: Some(return_lag_1),
             return_lag_2: Some(return_lag_2),
             return_lag_3: Some(return_lag_3),

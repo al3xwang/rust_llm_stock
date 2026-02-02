@@ -1,0 +1,32 @@
+{
+  "name": "baseline",
+  "params": {
+    "name": "baseline",
+    "num_leaves": 20,
+    "learning_rate": 0.02,
+    "scale_pos_weight": 1,
+    "max_depth": 6
+  },
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.5215270399619422,
+  "test_brier": 0.2499067339911476,
+  "quantile_summary": {
+    "q5": {
+      "trades": 5986,
+      "tot_return": 35.60475199337513
+    },
+    "q10": {
+      "trades": 11736,
+      "tot_return": 51.777575557192655
+    },
+    "q20": {
+      "trades": 21551,
+      "tot_return": 97.88018287873656
+    }
+  },
+  "predictions_file": "artifacts/test_predictions_kc_sweep_baseline.csv"
+}

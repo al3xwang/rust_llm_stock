@@ -27,8 +27,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         "month", "weekday", "quarter", "week_no",
         // Price changes
         "change", "pct_change",
-        // EMAs
-        "ema_5", "ema_10", "ema_20", "ema_30", "ema_60",
+
         // SMAs
         "sma_5", "sma_10", "sma_20",
         // MACD

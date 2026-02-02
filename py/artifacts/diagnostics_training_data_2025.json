@@ -1,0 +1,18 @@
+{
+  "shape": [
+    344923,
+    150
+  ],
+  "n_rows": 344923,
+  "n_cols": 150,
+  "n_numeric": 140,
+  "n_model_features": 140,
+  "high_missing_cols": [],
+  "constant_cols": [
+    "sector_momentum_vs_market",
+    "fx_usdcnh_pct_chg",
+    "macd_monthly_line_imputed",
+    "macd_monthly_signal_imputed"
+  ],
+  "present_removed_cols": []
+}

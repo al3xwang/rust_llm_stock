@@ -1,0 +1,12 @@
+{
+  "test_period": "20250319 to 20251231",
+  "total_samples": 46465,
+  "direction_accuracy": 0.5125793608092112,
+  "predicted_all_up": 46465,
+  "predicted_all_down": 0,
+  "model_total_return": 112.12160594636983,
+  "buyhold_total_return": 112.12160594636983,
+  "outperformance": 0.0,
+  "avg_daily_return": 0.0024130335940249614,
+  "return_volatility": 0.037969829072382555
+}

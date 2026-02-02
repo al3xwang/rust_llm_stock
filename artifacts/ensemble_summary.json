@@ -1,0 +1,15 @@
+{
+  "ensemble_members": [
+    "lgb_1",
+    "lgb_2",
+    "lgb_3",
+    "lgb_4",
+    "lgb_5"
+  ],
+  "best_threshold": 0.25,
+  "test_acc": 0.5125793608092112,
+  "test_prec": 0.5125793608092112,
+  "test_rec": 1.0,
+  "test_f1": 0.6777553285336217,
+  "test_auc": 0.537856935952842
+}
