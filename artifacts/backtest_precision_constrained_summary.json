@@ -1,13 +1,13 @@
 {
-  "min_recall_constraint": 0.6,
-  "selected_threshold": 0.622,
-  "val_precision": 0.741988193126713,
-  "val_recall": 0.600503370019623,
-  "test_total_strategy_return": 13.3967969757008,
-  "test_total_buyhold_return": 0.5187944565182361,
-  "mean_daily_return": 0.013844453769389939,
-  "std_daily_return": 0.012597235611815432,
-  "annual_sharpe": 17.446199868,
-  "max_drawdown": -0.005497329586428505,
-  "n_trades": 14132
+  "min_recall_constraint": 0.9,
+  "selected_threshold": 0.27678530833405285,
+  "val_precision": 0.6049545177898771,
+  "val_recall": 0.9000073416048748,
+  "test_total_strategy_return": 3.600054207820606,
+  "test_total_buyhold_return": 0.5828935100641282,
+  "mean_daily_return": 0.008037451067133513,
+  "std_daily_return": 0.014423391282864278,
+  "annual_sharpe": 8.846087420681709,
+  "max_drawdown": -0.020056173041083314,
+  "n_trades": 16466
 }

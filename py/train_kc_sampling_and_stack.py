@@ -18,6 +18,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils import resample
 import lightgbm as lgb
 from xgboost import XGBClassifier
@@ -47,6 +48,10 @@ numeric_cols = df_train.select_dtypes(include=[np.number]).columns.tolist()
 cat_cols = df_train.select_dtypes(include=['object']).columns.tolist()
 feature_cols = [c for c in numeric_cols if c not in exclude_cols and not any(c.startswith(p) for p in exclude_prefixes)]
 emb_cols = [c for c in numeric_cols if any(c.startswith(p) for p in exclude_prefixes)]
+# detect temporal-only features (month, weekday, quarter, week, day_of, year)
+temporal_indicators = ['month','weekday','quarter','week','week_no','day_of','year']
+temporal_cols = [c for c in feature_cols if any(t in c.lower() for t in temporal_indicators)]
+print(f'Found temporal cols: {temporal_cols}')
 
 imp = SimpleImputer(strategy='median')
 X_train_num = pd.DataFrame(imp.fit_transform(df_train[feature_cols]), columns=feature_cols)
@@ -81,6 +86,10 @@ mlp_configs = [
     {'hidden_layer_sizes':(64,), 'alpha':1e-4},
     {'hidden_layer_sizes':(64,32), 'alpha':1e-4},
 ]
+# Random Forest hyperparameter grid (kept small to limit runtime)
+rf_n_estimators = [100, 200]
+rf_max_depths = [10, None]
+rf_class_weights = [None, 'balanced']
 
 model_records = []
 val_features = {}
@@ -151,6 +160,89 @@ for mult in upsample_mults:
         y_test_proba_cal = calib.predict_proba(mlp.predict_proba(X_test_num)[:,1].reshape(-1,1))[:,1]
         name = f'mlp_up{mult}_hid{cfg["hidden_layer_sizes"]}'
         model_records.append({'name':name,'family':'mlp','upsample_mult':mult,'cfg':cfg})
+        val_features[name] = y_val_cal
+        test_features[name] = y_test_proba_cal
+        print(f"Saved feature: {name}")
+
+    # Temporal features — prefer LSTM predictions if available (artifacts/*temp_lstm*.csv)
+    if len(temporal_cols) > 0:
+        lval = Path('artifacts/val_predictions_temp_lstm.csv')
+        ltest = Path('artifacts/test_predictions_temp_lstm.csv')
+        if lval.exists() and ltest.exists():
+            # load and align to df_val / df_test
+            df_lval = pd.read_csv(lval)
+            df_ltest = pd.read_csv(ltest)
+            # merge to preserve order
+            merged_val = df_val[['ts_code','trade_date']].merge(df_lval, on=['ts_code','trade_date'], how='left')
+            merged_test = df_test[['ts_code','trade_date']].merge(df_ltest, on=['ts_code','trade_date'], how='left')
+            val_proba = merged_val['proba'].fillna(0.5).values
+            test_proba = merged_test['proba'].fillna(0.5).values
+            name = f'temp_lstm_up{mult}'
+            model_records.append({'name':name,'family':'temporal_lstm','upsample_mult':mult})
+            val_features[name] = val_proba
+            test_features[name] = test_proba
+            print(f"Loaded LSTM temporal predictions and saved feature: {name}")
+        else:
+            # fallback to classical temporal baselines (LR + small MLP)
+            # simple logistic baseline
+            temp_lr = LogisticRegression(solver='lbfgs', max_iter=500)
+            temp_lr.fit(Xs[temporal_cols], ys)
+            y_val_proba_raw = temp_lr.predict_proba(X_val_num[temporal_cols])[:,1]
+            calib = LogisticRegression(solver='lbfgs')
+            calib.fit(y_val_proba_raw.reshape(-1,1), y_val)
+            y_val_cal = calib.predict_proba(y_val_proba_raw.reshape(-1,1))[:,1]
+            y_test_proba_cal = calib.predict_proba(temp_lr.predict_proba(X_test_num[temporal_cols])[:,1].reshape(-1,1))[:,1]
+            name = f'temp_up{mult}_lr'
+            model_records.append({'name':name,'family':'temporal_lr','upsample_mult':mult})
+            val_features[name] = y_val_cal
+            test_features[name] = y_test_proba_cal
+            print(f"Saved feature: {name}")
+
+            # small MLP on temporal features
+            temp_mlp = MLPClassifier(hidden_layer_sizes=(32,), alpha=1e-4, max_iter=200, random_state=42)
+            temp_mlp.fit(Xs[temporal_cols], ys)
+            y_val_proba_raw = temp_mlp.predict_proba(X_val_num[temporal_cols])[:,1]
+            calib = LogisticRegression(solver='lbfgs')
+            calib.fit(y_val_proba_raw.reshape(-1,1), y_val)
+            y_val_cal = calib.predict_proba(y_val_proba_raw.reshape(-1,1))[:,1]
+            y_test_proba_cal = calib.predict_proba(temp_mlp.predict_proba(X_test_num[temporal_cols])[:,1].reshape(-1,1))[:,1]
+            name = f'temp_up{mult}_mlp'
+            model_records.append({'name':name,'family':'temporal_mlp','upsample_mult':mult})
+            val_features[name] = y_val_cal
+            test_features[name] = y_test_proba_cal
+            print(f"Saved feature: {name}")
+
+    # Random Forest hyperparameter grid
+    for n in rf_n_estimators:
+        for d in rf_max_depths:
+            for cw in rf_class_weights:
+                rf = RandomForestClassifier(n_estimators=n, max_depth=d, class_weight=cw, random_state=42, n_jobs=-1)
+                rf.fit(Xs, ys)
+                y_val_proba_raw = rf.predict_proba(X_val_num)[:,1]
+                calib = LogisticRegression(solver='lbfgs')
+                calib.fit(y_val_proba_raw.reshape(-1,1), y_val)
+                y_val_cal = calib.predict_proba(y_val_proba_raw.reshape(-1,1))[:,1]
+                y_test_proba_cal = calib.predict_proba(rf.predict_proba(X_test_num)[:,1].reshape(-1,1))[:,1]
+                d_label = 'none' if d is None else str(d)
+                cw_label = 'bal' if cw == 'balanced' else 'none'
+                name = f'rf_up{mult}_n{n}_d{d_label}_cw{cw_label}'
+                model_records.append({'name':name,'family':'rf','upsample_mult':mult,'n_estimators':n,'max_depth':d,'class_weight':str(cw)})
+                val_features[name] = y_val_cal
+                test_features[name] = y_test_proba_cal
+                print(f"Saved feature: {name}")
+
+    # Random Forest classifiers (integrated as additional base models)
+    for cw in [None, 'balanced']:
+        rf = RandomForestClassifier(n_estimators=200, max_depth=10, class_weight=cw, random_state=42, n_jobs=-1)
+        rf.fit(Xs, ys)
+        y_val_proba_raw = rf.predict_proba(X_val_num)[:,1]
+        calib = LogisticRegression(solver='lbfgs')
+        calib.fit(y_val_proba_raw.reshape(-1,1), y_val)
+        y_val_cal = calib.predict_proba(y_val_proba_raw.reshape(-1,1))[:,1]
+        y_test_proba_cal = calib.predict_proba(rf.predict_proba(X_test_num)[:,1].reshape(-1,1))[:,1]
+        cw_label = 'bal' if cw == 'balanced' else 'none'
+        name = f'rf_up{mult}_cw{cw_label}'
+        model_records.append({'name':name,'family':'rf','upsample_mult':mult,'class_weight':str(cw)})
         val_features[name] = y_val_cal
         test_features[name] = y_test_proba_cal
         print(f"Saved feature: {name}")

@@ -1,14 +1,11 @@
 {
-  "test_period": "20250319 to 20251231",
-  "total_samples": 46465,
-  "direction_accuracy": 0.5125793608092112,
-  "model_total_return": 112.12160594636983,
-  "buyhold_total_return": 112.12160594636983,
-  "outperformance": 0.0,
-  "model_sharpe_ratio": 1.008846278901698,
-  "buyhold_sharpe_ratio": 1.008846278901698,
-  "model_max_drawdown": -1.0,
-  "buyhold_max_drawdown": -1.0,
-  "model_win_rate": 0.5010007532551383,
-  "buyhold_win_rate": 0.5010007532551383
+  "total_samples": 80852,
+  "direction_accuracy": 0.7255890678013759,
+  "model_total_return": 10.937668205040978,
+  "buyhold_total_return": 0.5828935100641275,
+  "outperformance": 10.35477469497685,
+  "model_sharpe_ratio": 15.36655854202469,
+  "buyhold_sharpe_ratio": 2.1297599654186343,
+  "model_max_drawdown": -0.013257666326300236,
+  "buyhold_max_drawdown": -0.1945179979434352
 }

@@ -45,24 +45,21 @@ ens_test_proba = stacker.predict_proba(test_feat)[:,1]
 
 # Threshold search: maximize precision subject to recall >= min_recall
 min_recall = args.min_recall
-best_prec = -1
-best_thr = None
-best_metrics = None
-for thr in np.arange(0.0,1.001,0.001):
-    preds = (ens_val_proba >= thr).astype(int)
-    rec = recall_score(y_val, preds, zero_division=0)
-    if rec >= min_recall:
-        prec = precision_score(y_val, preds, zero_division=0)
-        acc = accuracy_score(y_val, preds)
-        if prec > best_prec:
-            best_prec = prec
-            best_thr = thr
-            best_metrics = {'precision': prec, 'recall': rec, 'accuracy': acc}
-
-if best_thr is None:
+from sklearn.metrics import precision_recall_curve
+precisions, recalls, thresholds = precision_recall_curve(y_val, ens_val_proba)
+# precision_recall_curve yields precision/recall arrays of length len(thresholds)+1
+# associate each threshold with precision/recall at index i (use precisions[:-1], recalls[:-1])
+valid_idx = np.where(recalls[:-1] >= min_recall)[0]
+if len(valid_idx) > 0:
+    # choose threshold with max precision among valid
+    best_idx = valid_idx[np.argmax(precisions[:-1][valid_idx])]
+    best_prec = float(precisions[:-1][best_idx])
+    best_thr = float(thresholds[best_idx])
+    best_metrics = {'precision': best_prec, 'recall': float(recalls[:-1][best_idx]), 'accuracy': float(accuracy_score(y_val, (ens_val_proba>=best_thr).astype(int)))}
+else:
     print(f"No threshold satisfies recall >= {min_recall}")
     best_thr = 0.5
-    best_metrics = {'precision': precision_score(y_val, (ens_val_proba>=best_thr).astype(int), zero_division=0), 'recall': recall_score(y_val, (ens_val_proba>=best_thr).astype(int), zero_division=0), 'accuracy': accuracy_score(y_val, (ens_val_proba>=best_thr).astype(int))}
+    best_metrics = {'precision': float(precision_score(y_val, (ens_val_proba>=best_thr).astype(int), zero_division=0)), 'recall': float(recall_score(y_val, (ens_val_proba>=best_thr).astype(int), zero_division=0)), 'accuracy': float(accuracy_score(y_val, (ens_val_proba>=best_thr).astype(int)))}
 
 print(f"Selected threshold {best_thr:.3f} on val -> precision={best_metrics['precision']:.4f}, recall={best_metrics['recall']:.4f}, acc={best_metrics['accuracy']:.4f}")
 

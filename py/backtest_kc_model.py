@@ -23,20 +23,34 @@ print("\n📁 Loading Data...")
 test_data = pd.read_csv("./data/kc_test.csv")
 predictions = pd.read_csv("./artifacts/test_predictions_kc_final.csv")
 
-# Merge predictions with actual returns
-backtest_df = pd.DataFrame({
-    'trade_date': test_data['trade_date'].values,
-    'ts_code': test_data['ts_code'].values,
-    'actual_direction': test_data['next_day_direction'].values,
-    'predicted_direction': predictions['predicted'].values,
-    'predicted_proba': predictions['predicted_proba'].values,
-    'actual_return': test_data['next_day_return'].values,
-})
+# Determine which probability column is present
+if 'predicted_proba' in predictions.columns:
+    proba_col = 'predicted_proba'
+elif 'predicted_proba_calibrated' in predictions.columns:
+    proba_col = 'predicted_proba_calibrated'
+elif 'predicted_proba_raw' in predictions.columns:
+    proba_col = 'predicted_proba_raw'
+else:
+    raise KeyError('No probability column found in predictions CSV (expected one of: predicted_proba, predicted_proba_calibrated, predicted_proba_raw)')
 
+# Merge predictions with actual returns using ts_code + trade_date
+predictions = predictions.rename(columns={'actual':'actual_from_pred'})
+merged = pd.merge(test_data, predictions, on=['ts_code','trade_date'], how='inner')
+if merged.empty:
+    raise ValueError('No matching rows after merging test data with predictions. Check that trade_date/ts_code formats match')
+# Build backtest dataframe with aligned columns
+backtest_df = pd.DataFrame({
+    'trade_date': merged['trade_date'],
+    'ts_code': merged['ts_code'],
+    'actual_direction': merged['next_day_direction'],
+    'predicted_direction': merged['predicted'],
+    'predicted_proba': merged[proba_col],
+    'actual_return': merged['next_day_return'],
+})
 # Remove rows with missing data
 backtest_df = backtest_df.dropna()
 
-print(f"✅ Loaded {len(backtest_df)} test samples")
+print(f"✅ Loaded {len(backtest_df)} merged test samples (after inner join)")
 
 # ============================================================================
 # SECTION 1: Prediction Accuracy Analysis
@@ -104,25 +118,35 @@ print("="*70)
 backtest_df['strategy_return'] = backtest_df['predicted_direction'] * backtest_df['actual_return']
 backtest_df['buy_hold_return'] = backtest_df['actual_return']
 
-# Cumulative returns
-backtest_df['strategy_cumulative'] = (1 + backtest_df['strategy_return']).cumprod()
-backtest_df['buyhold_cumulative'] = (1 + backtest_df['buy_hold_return']).cumprod()
+# Aggregate per-trade returns into daily portfolio returns to avoid over-compounding
+# Compute equally-weighted daily returns (mean across stocks for each trade_date)
+daily = backtest_df.groupby('trade_date').agg(
+    strategy_return=('strategy_return','mean'),
+    buy_hold_return=('buy_hold_return','mean'),
+    trades_count=('strategy_return','size')
+).reset_index()
 
-strategy_total_return = backtest_df['strategy_cumulative'].iloc[-1] - 1
-buyhold_total_return = backtest_df['buyhold_cumulative'].iloc[-1] - 1
+daily['trade_date_dt'] = pd.to_datetime(daily['trade_date'], format='%Y%m%d')
 
-print(f"\nCumulative Returns (from start of test period):")
+# Daily cumulative returns (portfolio-level)
+daily['strategy_cumulative'] = (1 + daily['strategy_return']).cumprod()
+daily['buyhold_cumulative'] = (1 + daily['buy_hold_return']).cumprod()
+
+strategy_total_return = daily['strategy_cumulative'].iloc[-1] - 1
+buyhold_total_return = daily['buyhold_cumulative'].iloc[-1] - 1
+
+print(f"\nCumulative Returns (portfolio-level, aggregated by day):")
 print(f"   Model Strategy:  {strategy_total_return:+.2%}")
 print(f"   Buy & Hold:      {buyhold_total_return:+.2%}")
 print(f"   Outperformance:  {strategy_total_return - buyhold_total_return:+.2%}")
 
-# Daily statistics
-strategy_mean_daily = backtest_df['strategy_return'].mean()
-strategy_std_daily = backtest_df['strategy_return'].std()
-buyhold_mean_daily = backtest_df['buy_hold_return'].mean()
-buyhold_std_daily = backtest_df['buy_hold_return'].std()
+# Portfolio-level daily statistics (from aggregated daily returns)
+strategy_mean_daily = daily['strategy_return'].mean()
+strategy_std_daily = daily['strategy_return'].std()
+buyhold_mean_daily = daily['buy_hold_return'].mean()
+buyhold_std_daily = daily['buy_hold_return'].std()
 
-# Sharpe ratio (assuming 0 risk-free rate, daily data)
+# Sharpe ratio (assuming 0 risk-free rate, daily returns)
 annual_trading_days = 252
 strategy_sharpe = strategy_mean_daily / strategy_std_daily * np.sqrt(annual_trading_days) if strategy_std_daily > 0 else 0
 buyhold_sharpe = buyhold_mean_daily / buyhold_std_daily * np.sqrt(annual_trading_days) if buyhold_std_daily > 0 else 0
@@ -137,8 +161,8 @@ def calculate_max_drawdown(cumulative_returns):
     drawdown = (cumulative_returns - running_max) / running_max
     return drawdown.min()
 
-strategy_mdd = calculate_max_drawdown(backtest_df['strategy_cumulative'])
-buyhold_mdd = calculate_max_drawdown(backtest_df['buyhold_cumulative'])
+strategy_mdd = calculate_max_drawdown(daily['strategy_cumulative'])
+buyhold_mdd = calculate_max_drawdown(daily['buyhold_cumulative'])
 
 print(f"\nMaximum Drawdown:")
 print(f"   Model Strategy:  {strategy_mdd:.2%}")
@@ -164,15 +188,22 @@ for confidence_threshold in [0.50, 0.55, 0.60, 0.65]:
     high_conf['strategy_return'] = high_conf['predicted_direction'] * high_conf['actual_return']
     accuracy = (high_conf['predicted_direction'] == high_conf['actual_direction']).sum() / len(high_conf)
     avg_return = high_conf['strategy_return'].mean()
-    total_return = (1 + high_conf['strategy_return']).prod() - 1
+    # Aggregate by day to compute realistic cumulative return
+    daily_high = high_conf.groupby('trade_date').agg(strategy_return=('strategy_return','mean')).reset_index()
+    if len(daily_high) > 0:
+        total_return = (1 + daily_high['strategy_return']).prod() - 1
+        trades_days = len(daily_high)
+    else:
+        total_return = 0
+        trades_days = 0
     win_rate = (high_conf['strategy_return'] > 0).sum() / len(high_conf)
     
     print(f"\nConfidence Threshold: {confidence_threshold:.0%}")
-    print(f"   Trades: {len(high_conf):,} ({len(high_conf)/len(backtest_df)*100:.1f}% of all days)")
+    print(f"   Trades (rows): {len(high_conf):,}; Days with trades: {trades_days:,} ({trades_days/len(daily)*100:.1f}% of days)")
     print(f"   Accuracy: {accuracy:.2%}")
     print(f"   Win Rate: {win_rate:.2%}")
-    print(f"   Avg Daily Return: {avg_return:+.4%}")
-    print(f"   Total Return: {total_return:+.2%}")
+    print(f"   Avg Trade Return: {avg_return:+.4%}")
+    print(f"   Total Return (daily-aggregated): {total_return:+.2%}")
 
 # ============================================================================
 # SECTION 5: Monthly Performance
@@ -181,22 +212,20 @@ print("\n" + "="*70)
 print("📅 SECTION 5: MONTHLY PERFORMANCE")
 print("="*70)
 
-backtest_df['trade_date_dt'] = pd.to_datetime(backtest_df['trade_date'], format='%Y%m%d')
-backtest_df['year_month'] = backtest_df['trade_date_dt'].dt.strftime('%Y-%m')
-
-monthly_perf = backtest_df.groupby('year_month').agg({
-    'strategy_return': 'sum',
-    'buy_hold_return': 'sum',
-    'actual_direction': 'count'
-}).rename(columns={'actual_direction': 'trades'})
-
+# Use daily (portfolio-level) data to compute monthly performance
+daily['year_month'] = daily['trade_date_dt'].dt.strftime('%Y-%m')
+monthly_perf = daily.groupby('year_month').agg(
+    strategy_return=('strategy_return','sum'),
+    buy_hold_return=('buy_hold_return','sum'),
+    trades=('trades_count','sum')
+).reset_index()
 monthly_perf['outperformance'] = monthly_perf['strategy_return'] - monthly_perf['buy_hold_return']
 
 print("\nMonthly Returns (Strategy vs Buy & Hold):")
-print(f"{'Month':<10} {'Strategy':>12} {'Buy&Hold':>12} {'Outperf':>12} {'Trades':>8}")
+print(f"{ 'Month':<10} {'Strategy':>12} {'Buy&Hold':>12} {'Outperf':>12} {'Trades':>8}")
 print("-" * 54)
 for idx, row in monthly_perf.iterrows():
-    print(f"{idx:<10} {row['strategy_return']:>11.2%} {row['buy_hold_return']:>11.2%} {row['outperformance']:>11.2%} {int(row['trades']):>7}")
+    print(f"{row['year_month']:<10} {row['strategy_return']:>11.2%} {row['buy_hold_return']:>11.2%} {row['outperformance']:>11.2%} {int(row['trades']):>7}")
 
 # ============================================================================
 # SECTION 6: Visualizations
@@ -205,18 +234,18 @@ print("\n📈 Generating Visualizations...")
 
 fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
-# Cumulative returns
-axes[0, 0].plot(backtest_df['strategy_cumulative'], label='Model Strategy', linewidth=2)
-axes[0, 0].plot(backtest_df['buyhold_cumulative'], label='Buy & Hold', linewidth=2)
-axes[0, 0].set_title('Cumulative Returns Comparison')
+# Cumulative returns (daily aggregated)
+axes[0, 0].plot(daily['trade_date_dt'], daily['strategy_cumulative'], label='Model Strategy', linewidth=2)
+axes[0, 0].plot(daily['trade_date_dt'], daily['buyhold_cumulative'], label='Buy & Hold', linewidth=2)
+axes[0, 0].set_title('Cumulative Returns Comparison (daily aggregated)')
 axes[0, 0].set_ylabel('Cumulative Return (x)')
 axes[0, 0].legend()
 axes[0, 0].grid(True, alpha=0.3)
 
-# Daily returns distribution
-axes[0, 1].hist(backtest_df['strategy_return']*100, bins=50, alpha=0.6, label='Model Strategy', edgecolor='black')
-axes[0, 1].hist(backtest_df['buy_hold_return']*100, bins=50, alpha=0.6, label='Buy & Hold', edgecolor='black')
-axes[0, 1].set_title('Daily Returns Distribution')
+# Daily returns distribution (portfolio-level daily returns)
+axes[0, 1].hist(daily['strategy_return']*100, bins=50, alpha=0.6, label='Model Strategy (daily)', edgecolor='black')
+axes[0, 1].hist(daily['buy_hold_return']*100, bins=50, alpha=0.6, label='Buy & Hold (daily)', edgecolor='black')
+axes[0, 1].set_title('Daily Returns Distribution (portfolio-level)')
 axes[0, 1].set_xlabel('Daily Return (%)')
 axes[0, 1].set_ylabel('Frequency')
 axes[0, 1].legend()
@@ -230,7 +259,7 @@ axes[1, 0].bar(x_pos + 0.2, monthly_perf['buy_hold_return']*100, 0.4, label='Buy
 axes[1, 0].set_title('Monthly Returns Comparison')
 axes[1, 0].set_ylabel('Monthly Return (%)')
 axes[1, 0].set_xticks(x_pos)
-axes[1, 0].set_xticklabels(monthly_perf.index, rotation=45)
+axes[1, 0].set_xticklabels(monthly_perf['year_month'], rotation=45)
 axes[1, 0].legend()
 axes[1, 0].grid(True, alpha=0.3, axis='y')
 axes[1, 0].axhline(y=0, color='k', linestyle='-', linewidth=0.5)
@@ -275,8 +304,9 @@ print("="*70)
 
 print(f"""
 Performance Metrics:
-  Total Test Samples: {len(backtest_df):,}
-  Date Range: {backtest_df['trade_date'].min()} to {backtest_df['trade_date'].max()}
+  Total Test Samples (rows): {len(backtest_df):,}
+  Total Trading Days: {len(daily):,}
+  Date Range: {daily['trade_date'].min()} to {daily['trade_date'].max()}
   
 Accuracy:
   Direction Accuracy: {accuracy:.2%}
@@ -284,8 +314,8 @@ Accuracy:
   Down Prediction Win Rate: {(down_preds['actual_return'] < 0).sum() / len(down_preds) * 100:.2f}%
 
 Returns:
-  Model Strategy Total Return: {strategy_total_return:+.2%}
-  Buy & Hold Total Return: {buyhold_total_return:+.2%}
+  Model Strategy Total Return (daily-aggregated): {strategy_total_return:+.2%}
+  Buy & Hold Total Return (daily-aggregated): {buyhold_total_return:+.2%}
   Outperformance: {strategy_total_return - buyhold_total_return:+.2%}
   
   Model Daily Mean Return: {strategy_mean_daily:+.4%}
@@ -298,8 +328,8 @@ Risk-Adjusted:
   Model Max Drawdown: {strategy_mdd:.2%}
   Buy & Hold Max Drawdown: {buyhold_mdd:.2%}
 
-Best Performing Month: {monthly_perf['strategy_return'].idxmax()} ({monthly_perf['strategy_return'].max():+.2%})
-Worst Performing Month: {monthly_perf['strategy_return'].idxmin()} ({monthly_perf['strategy_return'].min():+.2%})
+Best Performing Month: {monthly_perf.loc[monthly_perf['strategy_return'].idxmax(),'year_month']} ({monthly_perf['strategy_return'].max():+.2%})
+Worst Performing Month: {monthly_perf.loc[monthly_perf['strategy_return'].idxmin(),'year_month']} ({monthly_perf['strategy_return'].min():+.2%})
 
 Key Insight: 
   The model shows {('POSITIVE' if strategy_total_return > buyhold_total_return else 'NEGATIVE')} 
